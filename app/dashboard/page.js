@@ -45,6 +45,7 @@ export default function Dashboard() {
            {[
           { icon:'🍽️', label:'Mon Restaurant', desc:'Configurer le profil', color:'#00C2FF', url:'/dashboard/restaurant' },
           { icon:'💊', label:'Score de Santé', desc:'Bientôt disponible', color:'#00E5A0' },
+{ icon:'🎯', label:'Fixation de prix IA', desc:'Prix optimal par plat', color:'#F5A623', url:'/dashboard/prix' },
           { icon:'🥩', label:'Ingrédients', desc:'Gérer mes ingrédients', color:'#00C2FF', url:'/dashboard/ingredients' },
           { icon:'🧾', label:'Mes Recettes', desc:'Gérer mes recettes', color:'#F5A623', url:'/dashboard/recettes' },
           { icon:'🧬', label:'Jumeau Numérique', desc:'Bientôt disponible', color:'#B47FFF' },
