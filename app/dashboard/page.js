@@ -49,6 +49,7 @@ export default function Dashboard() {
           { icon:'🥩', label:'Ingrédients', desc:'Gérer mes ingrédients', color:'#00C2FF', url:'/dashboard/ingredients' },
           { icon:'🧾', label:'Mes Recettes', desc:'Gérer mes recettes', color:'#F5A623', url:'/dashboard/recettes' },
           { icon:'🧬', label:'Jumeau Numérique', desc:'Bientôt disponible', color:'#B47FFF' },
+          { icon:'📅', label:'Achalandage', desc:'Événements & opportunités', color:'#FF8C42', url:'/dashboard/achalandage' },
         ].map((card, i) => (
             <div key={i} onClick={() => card.url && router.push(card.url)} style={{ background:'#111827', border:`1px solid ${card.color}30`, borderRadius:'16px', padding:'24px', cursor:'pointer' }}>
               <div style={{ fontSize:'32px', marginBottom:'12px' }}>{card.icon}</div>
