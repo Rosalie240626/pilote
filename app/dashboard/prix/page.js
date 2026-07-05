@@ -26,143 +26,67 @@ export default function Prix() {
     setRecettes(data || [])
   }
 
-  function coutRecette(r) {
+  function cout(r) {
     return r.recette_ingredients?.reduce((acc, ri) => {
-      const prix = ri.ingredients?.prix_unitaire || 0
-      const grammage = ri.grammage || 0
-      const unite = ri.ingredients?.unite
-      const facteur = (unite === 'g' || unite === 'ml') ? grammage / 1000 : grammage
-      return acc + (prix * facteur)
+      const f = (ri.ingredients?.unite === 'g' || ri.ingredients?.unite === 'ml') ? ri.grammage / 1000 : ri.grammage
+      return acc + (ri.ingredients?.prix_unitaire || 0) * f
     }, 0) || 0
   }
 
   async function analyser() {
     if (!selected) return
-    setLoading(true)
-    setResult(null)
-    const cout = coutRecette(selected)
+    setLoading(true); setResult(null)
     const res = await fetch('/api/prix', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        nom: selected.nom,
-        cout: cout.toFixed(2),
-        ville: org?.ville,
-        positionnement: org?.positionnement || 'casual',
-        style_cuisine: org?.style_cuisine?.join(', '),
-        clientele: org?.clientele_cible?.join(', '),
-        prix_concurrents: prixConcurrents || null,
-        prix_max: prixMax || null,
-      })
+      body: JSON.stringify({ nom: selected.nom, cout: cout(selected).toFixed(2), positionnement: org?.positionnement || 'casual', style_cuisine: org?.style_cuisine?.join(', '), clientele: org?.clientele_cible?.join(', '), ville: org?.ville, prix_concurrents: prixConcurrents || null, prix_max: prixMax || null })
     })
-    const data = await res.json()
-    setResult(data)
+    setResult(await res.json())
     setLoading(false)
   }
 
-  function couleurFC(fc) {
-    if (fc <= 28) return '#00E5A0'
-    if (fc <= 35) return '#F5A623'
-    return '#FF4D6D'
-  }
-
-  const inp = { width:'100%', padding:'10px 12px', borderRadius:'8px', border:'1px solid #1F2937', background:'#1F2937', color:'white', fontSize:'14px', boxSizing:'border-box' }
+  const inp = { width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'transparent', color: 'inherit', fontSize: '14px', boxSizing: 'border-box' }
+  const fcColor = fc => fc <= 28 ? '#00E5A0' : fc <= 35 ? '#F5A623' : '#FF4D6D'
 
   return (
-    <div style={{ minHeight:'100vh', background:'#0A0F1E', color:'white', fontFamily:'sans-serif' }}>
-      <div style={{ background:'#111827', borderBottom:'1px solid rgba(0,194,255,0.15)', padding:'16px 32px', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-        <h1 style={{ color:'#00C2FF', fontWeight:'800', fontSize:'24px', margin:0, cursor:'pointer' }} onClick={() => router.push('/dashboard')}>PILOTE</h1>
-        <span onClick={() => router.push('/dashboard')} style={{ color:'#8B9BB4', fontSize:'14px', cursor:'pointer' }}>← Retour</span>
-      </div>
+    <div>
+      <h1 style={{ fontSize: '22px', fontWeight: '700', marginBottom: '4px' }}>Fixation de prix IA</h1>
+      <p style={{ color: 'var(--muted)', fontSize: '14px', marginBottom: '28px' }}>L'IA recherche les prix concurrents et suggère le prix optimal</p>
 
-      <div style={{ maxWidth:'800px', margin:'40px auto', padding:'0 24px' }}>
-        <h2 style={{ fontSize:'22px', fontWeight:'700', marginBottom:'8px' }}>🎯 Fixation de prix IA</h2>
-        <p style={{ color:'#8B9BB4', marginBottom:'32px' }}>Sélectionne un plat — l'IA suggère le prix optimal selon ton positionnement.</p>
-
-        <div style={{ background:'#111827', border:'1px solid rgba(0,194,255,0.15)', borderRadius:'16px', padding:'24px', marginBottom:'16px' }}>
-          <p style={{ color:'#8B9BB4', fontSize:'12px', marginBottom:'12px', textTransform:'uppercase', letterSpacing:'1px' }}>Choisir un plat</p>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(200px, 1fr))', gap:'10px', marginBottom:'16px' }}>
-            {recettes.map(r => {
-              const cout = coutRecette(r)
-              const isSelected = selected?.id === r.id
-              return (
-                <div key={r.id} onClick={() => { setSelected(r); setResult(null) }}
-                  style={{ padding:'14px', borderRadius:'10px', border:`1px solid ${isSelected ? '#00C2FF' : '#1F2937'}`, background: isSelected ? 'rgba(0,194,255,0.08)' : 'transparent', cursor:'pointer' }}>
-                  <div style={{ fontWeight:'600', fontSize:'14px', marginBottom:'4px' }}>{r.nom}</div>
-                  <div style={{ color:'#00C2FF', fontSize:'13px' }}>Coût: {cout.toFixed(2)}$</div>
-                  {r.prix_vente && <div style={{ color:'#8B9BB4', fontSize:'12px' }}>Vente actuelle: {r.prix_vente}$</div>}
-                </div>
-              )
-            })}
-          </div>
-
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'16px' }}>
-            <div>
-              <label style={{ color:'#8B9BB4', fontSize:'12px', display:'block', marginBottom:'6px', textTransform:'uppercase', letterSpacing:'1px' }}>Prix moyen concurrents ($)</label>
-              <input type="number" placeholder="Ex: 18.00" value={prixConcurrents} onChange={e => setPrixConcurrents(e.target.value)} style={inp} />
+      <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '20px', marginBottom: '16px' }}>
+        <p style={{ color: 'var(--muted)', fontSize: '12px', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '1px' }}>Choisir un plat</p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '16px' }}>
+          {recettes.map(r => (
+            <div key={r.id} onClick={() => { setSelected(r); setResult(null) }} style={{ padding: '8px 16px', borderRadius: '8px', border: `1px solid ${selected?.id === r.id ? '#00C2FF' : 'var(--border)'}`, background: selected?.id === r.id ? 'rgba(0,194,255,0.08)' : 'transparent', cursor: 'pointer', fontSize: '14px' }}>
+              {r.nom} — <span style={{ color: '#00C2FF' }}>{cout(r).toFixed(2)}$</span>
             </div>
-            <div>
-              <label style={{ color:'#8B9BB4', fontSize:'12px', display:'block', marginBottom:'6px', textTransform:'uppercase', letterSpacing:'1px' }}>Prix maximum à ne pas dépasser ($)</label>
-              <input type="number" placeholder="Ex: 25.00" value={prixMax} onChange={e => setPrixMax(e.target.value)} style={inp} />
-            </div>
-          </div>
-
-          {recettes.length === 0 && <p style={{ color:'#8B9BB4' }}>Aucune recette — créez d'abord des recettes dans "Mes Recettes"</p>}
-          <button onClick={analyser} disabled={!selected || loading}
-            style={{ padding:'12px 28px', borderRadius:'8px', background: selected ? '#00C2FF' : '#1F2937', color: selected ? '#0A0F1E' : '#8B9BB4', fontWeight:'700', border:'none', cursor: selected ? 'pointer' : 'default', fontSize:'15px' }}>
-            {loading ? '⏳ Analyse en cours...' : "✨ Analyser avec l'IA"}
-          </button>
+          ))}
         </div>
-
-        {result && (
-          <div style={{ background:'#111827', border:'1px solid rgba(0,194,255,0.2)', borderRadius:'16px', padding:'28px' }}>
-            <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'24px' }}>
-              <span style={{ fontSize:'24px' }}>🤖</span>
-              <div>
-                <div style={{ fontWeight:'700', fontSize:'18px', color:'#00C2FF' }}>Recommandation IA pour {selected.nom}</div>
-                <div style={{ color:'#8B9BB4', fontSize:'13px' }}>Basé sur ton positionnement et ta clientèle</div>
-              </div>
-            </div>
-
-            <div style={{ background:'rgba(0,194,255,0.06)', border:'1px solid rgba(0,194,255,0.2)', borderRadius:'12px', padding:'20px', marginBottom:'16px', textAlign:'center' }}>
-              <div style={{ color:'#8B9BB4', fontSize:'12px', marginBottom:'8px', textTransform:'uppercase', letterSpacing:'1px' }}>Prix recommandé</div>
-              <div style={{ fontSize:'48px', fontWeight:'800', color:'#00C2FF' }}>{result.prix_suggere}$</div>
-              <div style={{ color:'#8B9BB4', fontSize:'13px', marginTop:'4px' }}>Fourchette : {result.prix_min}$ — {result.prix_max_suggere}$</div>
-              {prixMax && <div style={{ color:'#F5A623', fontSize:'13px', marginTop:'4px' }}>Maximum fixé : {prixMax}$</div>}
-              {prixConcurrents && <div style={{ color:'#8B9BB4', fontSize:'13px', marginTop:'4px' }}>Concurrents : {prixConcurrents}$ en moyenne</div>}
-            </div>
-
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'16px' }}>
-              <div style={{ background:'#0A0F1E', borderRadius:'10px', padding:'16px' }}>
-                <div style={{ color:'#8B9BB4', fontSize:'12px', marginBottom:'4px' }}>FOOD COST</div>
-                <div style={{ fontWeight:'700', fontSize:'22px', color: couleurFC(result.food_cost_pct) }}>{result.food_cost_pct}%</div>
-              </div>
-              <div style={{ background:'#0A0F1E', borderRadius:'10px', padding:'16px' }}>
-                <div style={{ color:'#8B9BB4', fontSize:'12px', marginBottom:'4px' }}>MARGE PAR PLAT</div>
-                <div style={{ fontWeight:'700', fontSize:'22px', color:'#00E5A0' }}>{(result.prix_suggere - coutRecette(selected)).toFixed(2)}$</div>
-              </div>
-            </div>
-
-            
-          {result.prix_concurrents_trouves && (
-  <div style={{ background:'rgba(180,127,255,0.06)', border:'1px solid rgba(180,127,255,0.2)', borderRadius:'10px', padding:'16px', marginBottom:'12px' }}>
-    <div style={{ color:'#B47FFF', fontSize:'12px', marginBottom:'8px', textTransform:'uppercase', letterSpacing:'1px' }}>🔍 Prix concurrents trouvés</div>
-    <p style={{ color:'#F0F4FF', fontSize:'14px', lineHeight:'1.6', margin:0 }}>{result.prix_concurrents_trouves}</p>
-    {result.sources_consultees && <p style={{ color:'#8B9BB4', fontSize:'12px', marginTop:'8px', margin:0 }}>Sources: {result.sources_consultees}</p>}
-  </div>
-)}
-<div style={{ background:'#0A0F1E', borderRadius:'10px', padding:'16px', marginBottom:'12px' }}>
-  <div style={{ color:'#8B9BB4', fontSize:'12px', marginBottom:'8px', textTransform:'uppercase', letterSpacing:'1px' }}>Justification</div>
-  <p style={{ color:'#F0F4FF', fontSize:'14px', lineHeight:'1.6', margin:0 }}>{result.justification}</p>
-</div>
-
-            <div style={{ background:'rgba(245,166,35,0.06)', border:'1px solid rgba(245,166,35,0.2)', borderRadius:'10px', padding:'16px' }}>
-              <div style={{ color:'#F5A623', fontSize:'12px', marginBottom:'8px', textTransform:'uppercase', letterSpacing:'1px' }}>💡 Conseil Pilote</div>
-              <p style={{ color:'#F0F4FF', fontSize:'14px', lineHeight:'1.6', margin:0 }}>{result.conseil}</p>
-            </div>
-          </div>
-        )}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+          <div><label style={{ color: 'var(--muted)', fontSize: '12px', display: 'block', marginBottom: '6px' }}>PRIX MOYEN CONCURRENTS ($)</label><input type="number" placeholder="Ex: 18.00" value={prixConcurrents} onChange={e => setPrixConcurrents(e.target.value)} style={inp} /></div>
+          <div><label style={{ color: 'var(--muted)', fontSize: '12px', display: 'block', marginBottom: '6px' }}>PRIX MAXIMUM ($)</label><input type="number" placeholder="Ex: 25.00" value={prixMax} onChange={e => setPrixMax(e.target.value)} style={inp} /></div>
+        </div>
+        <button onClick={analyser} disabled={!selected || loading} style={{ padding: '9px 24px', borderRadius: '8px', background: selected ? '#00C2FF' : 'var(--border)', color: selected ? '#0A0F1E' : 'var(--muted)', fontWeight: '700', border: 'none', cursor: selected ? 'pointer' : 'default' }}>
+          {loading ? '⏳ Analyse en cours...' : '✨ Analyser avec l\'IA'}
+        </button>
       </div>
+
+      {result && (
+        <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '24px' }}>
+          <div style={{ textAlign: 'center', padding: '20px', marginBottom: '16px', background: 'rgba(0,194,255,0.06)', borderRadius: '10px', border: '1px solid rgba(0,194,255,0.15)' }}>
+            <div style={{ color: 'var(--muted)', fontSize: '12px', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '1px' }}>Prix recommandé</div>
+            <div style={{ fontSize: '48px', fontWeight: '800', color: '#00C2FF' }}>{result.prix_suggere}$</div>
+            <div style={{ color: 'var(--muted)', fontSize: '13px' }}>Fourchette : {result.prix_min}$ — {result.prix_max}$</div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+            <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '8px', padding: '14px' }}><div style={{ color: 'var(--muted)', fontSize: '12px', marginBottom: '4px' }}>FOOD COST</div><div style={{ fontWeight: '700', fontSize: '20px', color: fcColor(result.food_cost_pct) }}>{result.food_cost_pct}%</div></div>
+            <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '8px', padding: '14px' }}><div style={{ color: 'var(--muted)', fontSize: '12px', marginBottom: '4px' }}>MARGE PAR PLAT</div><div style={{ fontWeight: '700', fontSize: '20px', color: '#00E5A0' }}>{(result.prix_suggere - cout(selected)).toFixed(2)}$</div></div>
+          </div>
+          {result.prix_concurrents_trouves && <div style={{ background: 'rgba(180,127,255,0.06)', border: '1px solid rgba(180,127,255,0.2)', borderRadius: '8px', padding: '14px', marginBottom: '12px' }}><div style={{ color: '#B47FFF', fontSize: '12px', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '1px' }}>🔍 Concurrents trouvés</div><p style={{ fontSize: '13px', margin: 0 }}>{result.prix_concurrents_trouves}</p></div>}
+          <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '8px', padding: '14px', marginBottom: '12px' }}><div style={{ color: 'var(--muted)', fontSize: '12px', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '1px' }}>Justification</div><p style={{ fontSize: '13px', margin: 0 }}>{result.justification}</p></div>
+          <div style={{ background: 'rgba(245,166,35,0.06)', border: '1px solid rgba(245,166,35,0.2)', borderRadius: '8px', padding: '14px' }}><div style={{ color: '#F5A623', fontSize: '12px', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '1px' }}>💡 Conseil</div><p style={{ fontSize: '13px', margin: 0 }}>{result.conseil}</p></div>
+        </div>
+      )}
     </div>
   )
 }

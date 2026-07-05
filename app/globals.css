@@ -24,3 +24,9 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+:root {
+  --card: #1a1f2e;
+  --border: rgba(255,255,255,0.07);
+  --muted: #8b9bb4;
+  --hover: rgba(255,255,255,0.04);
+}
