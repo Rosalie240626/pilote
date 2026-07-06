@@ -45,7 +45,7 @@ export default function Ingredients() {
     reader.onload = async () => {
       const res = await fetch('/api/facture', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image: reader.result }) })
       const data = await res.json()
-if (data.error) { alert('Erreur: ' + data.error); return }
+if (data.error) { alert('Erreur: ' + data.error); setLoadingFacture(false); return }
 setFactureData(data)
       setLoadingFacture(false)
     }
@@ -69,7 +69,7 @@ setFactureData(data)
           <p style={{ color: 'var(--muted)', fontSize: '14px' }}>Gérez vos ingrédients et prix fournisseurs</p>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
-          <input ref={fileRef} type="file" accept="image/*" onChange={analyserFacture} style={{ display: 'none' }} />
+          <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={analyserFacture} style={{ display: 'none' }} />
           <button onClick={() => fileRef.current.click()} disabled={loadingFacture} style={{ padding: '9px 16px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border)', color: 'inherit', cursor: 'pointer', fontSize: '13px' }}>
             {loadingFacture ? '⏳ Analyse...' : '📸 Importer facture'}
           </button>

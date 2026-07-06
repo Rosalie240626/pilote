@@ -1,22 +1,25 @@
-import OpenAI from 'openai'
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+import Anthropic from '@anthropic-ai/sdk'
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
 export async function POST(req) {
   try {
     const { image } = await req.json()
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
+    const base64 = image.split(',')[1]
+    const mediaType = image.split(';')[0].split(':')[1]
+
+    const response = await client.messages.create({
+      model: 'claude-opus-4-6',
+      max_tokens: 1024,
       messages: [{
         role: 'user',
         content: [
-          { type: 'image_url', image_url: { url: image } },
-          { type: 'text', text: `Analyse cette facture. Réponds UNIQUEMENT avec ce JSON:
-{"fournisseur": "nom", "ingredients": [{"nom": "produit", "prix_unitaire": 0.00, "unite": "kg", "fournisseur": "nom"}]}` }
+          { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+          { type: 'text', text: 'Analyse cette facture. Réponds UNIQUEMENT en JSON: {"fournisseur": "nom", "ingredients": [{"nom": "produit", "prix_unitaire": 0.00, "unite": "kg", "fournisseur": "nom"}]}' }
         ]
-      }],
-      max_tokens: 1000,
+      }]
     })
-    const text = response.choices[0].message.content
+
+    const text = response.content[0].text
     const match = text.match(/\{[\s\S]*\}/)
     const result = JSON.parse(match ? match[0] : text)
     if (!result.ingredients) result.ingredients = []
