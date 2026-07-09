@@ -1,8 +1,10 @@
 import OpenAI from 'openai'
+import { getUser } from '../../../lib/supabase-server'
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
 export async function POST(req) {
+  if (!(await getUser())) return Response.json({ error: 'Non autorisé' }, { status: 401 })
   try {
     const { nom, cout, positionnement, style_cuisine, clientele, ville, prix_concurrents, prix_max } = await req.json()
 

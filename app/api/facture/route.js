@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { getUser } from '../../../lib/supabase-server'
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
 export const maxDuration = 60

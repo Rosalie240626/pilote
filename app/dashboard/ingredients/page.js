@@ -70,11 +70,13 @@ export default function Ingredients() {
 
   const fournisseurs = useMemo(() => [...new Set(ingredients.filter(Boolean).map(i => i.fournisseur).filter(Boolean))], [ingredients])
 
+  const groupesExistants = useMemo(() => [...new Set(ingredients.filter(Boolean).map(i => i.ingredient_base).filter(Boolean))], [ingredients])
+
   const comparaisonData = useMemo(() => {
-    const nomsUniques = [...new Set(ingredients.filter(Boolean).map(i => i.nom))]
-    return nomsUniques.map(nom => {
-      const row = { nom }
-      ingredients.filter(i => i && (i.ingredient_base === nom || i.nom === nom)).forEach(i => { if (i.fournisseur) row[i.fournisseur] = parseFloat(i.prix_unitaire) })
+    const groupes = [...new Set(ingredients.filter(Boolean).map(i => i.ingredient_base || i.nom))]
+    return groupes.map(groupe => {
+      const row = { nom: groupe }
+      ingredients.filter(i => i && (i.ingredient_base || i.nom) === groupe).forEach(i => { if (i.fournisseur) row[i.fournisseur] = parseFloat(i.prix_unitaire) })
       return row
     }).filter(r => Object.keys(r).length > 2)
   }, [ingredients])
@@ -206,7 +208,7 @@ export default function Ingredients() {
                     onMouseLeave={e => { if(!isSel) e.currentTarget.style.background='transparent' }}>
                     {editMode && <input type="checkbox" checked={isSel} onChange={e => setSelected(prev => e.target.checked?[...prev,ing.id]:prev.filter(id=>id!==ing.id))} style={{ cursor:'pointer' }} />}
                     <div>
-                      <div style={{ fontWeight:'500', fontSize:'14px' }}>{ing.nom}</div>
+                      <div style={{ fontWeight:'500', fontSize:'14px' }}>{ing.nom}{ing.ingredient_base && <span title={'Groupe: '+ing.ingredient_base} style={{ marginLeft:'8px', fontSize:'10px', padding:'2px 6px', borderRadius:'4px', background:'rgba(0,194,255,0.12)', color:'#00C2FF' }}>🔗 {ing.ingredient_base}</span>}</div>
                       {ing.marque && <div style={{ color:'var(--muted)', fontSize:'12px' }}>{ing.marque}{ing.code_produit?' · '+ing.code_produit:''}</div>}
                     </div>
                     <span style={{ fontSize:'12px', color:catColor, fontWeight:'600' }}>{ing.categorie||'—'}</span>
@@ -350,6 +352,11 @@ export default function Ingredients() {
               <input value={drawerIng[f.k]||''} onChange={e => setDrawerIng({...drawerIng,[f.k]:e.target.value})} style={inp} />
             </div>
           ))}
+          <div style={{ marginBottom:'10px' }}>
+            <label style={{ color:'var(--muted)', fontSize:'11px', display:'block', marginBottom:'3px', textTransform:'uppercase' }}>Regrouper sous (comparateur)</label>
+            <input value={drawerIng.ingredient_base||''} onChange={e => setDrawerIng({...drawerIng,ingredient_base:e.target.value})} list="groupes-list" placeholder="ex: Bacon" style={inp} />
+            <datalist id="groupes-list">{groupesExistants.map(g => <option key={g} value={g} />)}</datalist>
+          </div>
           <div style={{ marginBottom:'10px' }}>
             <label style={{ color:'var(--muted)', fontSize:'11px', display:'block', marginBottom:'3px', textTransform:'uppercase' }}>Catégorie</label>
             <select value={drawerIng.categorie||''} onChange={e => setDrawerIng({...drawerIng,categorie:e.target.value})} style={inp}>
