@@ -2,12 +2,15 @@
 import { useState, useEffect, useMemo } from 'react'
 import { createClient } from '../../../lib/supabase'
 import { useRouter } from 'next/navigation'
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts'
 
 const CATEGORIES = ['Viandes','Produits laitiers','Légumes','Fruits','Épicerie','Boissons','Surgelés','Boulangerie','Poissons','Autre']
 const CAT_COLORS = { 'Viandes':'#FF4D6D','Produits laitiers':'#F5A623','Légumes':'#00E5A0','Fruits':'#FF8C42','Épicerie':'#00C2FF','Boissons':'#B47FFF','Surgelés':'#64B5F6','Boulangerie':'#FFD54F','Poissons':'#4FC3F7','Autre':'#8B9BB4' }
+const FOURNISSEUR_COLORS = ['#00C2FF','#00E5A0','#F5A623','#FF4D6D','#B47FFF','#FF8C42']
 
 export default function Ingredients() {
   const [ingredients, setIngredients] = useState([])
+  const [historique, setHistorique] = useState([])
   const [orgId, setOrgId] = useState(null)
   const [search, setSearch] = useState('')
   const [filters, setFilters] = useState({})
@@ -19,6 +22,8 @@ export default function Ingredients() {
   const [page, setPage] = useState(1)
   const [toast, setToast] = useState(null)
   const [showFilters, setShowFilters] = useState(false)
+  const [onglet, setOnglet] = useState('liste')
+  const [ingFournisseur, setIngFournisseur] = useState('')
   const perPage = 25
   const supabase = createClient()
   const router = useRouter()
@@ -33,10 +38,12 @@ export default function Ingredients() {
     setOrgId(member.organization_id)
     const { data } = await supabase.from('ingredients').select('*').eq('organization_id', member.organization_id).eq('archived', false).order('nom')
     setIngredients((data || []).filter(Boolean))
+    const { data: hist } = await supabase.from('ingredients_prix_historique').select('*, ingredients(nom, fournisseur)').order('created_at', { ascending: true })
+    setHistorique(hist || [])
   }
 
-  async function reload(oid) {
-    const { data } = await supabase.from('ingredients').select('*').eq('organization_id', oid || orgId).eq('archived', false).order('nom')
+  async function reload() {
+    const { data } = await supabase.from('ingredients').select('*').eq('organization_id', orgId).eq('archived', false).order('nom')
     setIngredients((data || []).filter(Boolean))
   }
 
@@ -61,12 +68,31 @@ export default function Ingredients() {
   const totalPages = Math.ceil(filtered.length / perPage)
   const activeFilters = Object.keys(filters).filter(k => filters[k]).length
 
+  const fournisseurs = useMemo(() => [...new Set(ingredients.filter(Boolean).map(i => i.fournisseur).filter(Boolean))], [ingredients])
+
+  const comparaisonData = useMemo(() => {
+    const nomsUniques = [...new Set(ingredients.filter(Boolean).map(i => i.nom))]
+    return nomsUniques.map(nom => {
+      const row = { nom }
+      ingredients.filter(i => i && (i.ingredient_base === nom || i.nom === nom)).forEach(i => { if (i.fournisseur) row[i.fournisseur] = parseFloat(i.prix_unitaire) })
+      return row
+    }).filter(r => Object.keys(r).length > 2)
+  }, [ingredients])
+
+  const historiqueFiltre = useMemo(() => {
+    if (!ingFournisseur) return []
+    return historique.filter(h => h.ingredients?.nom === ingFournisseur).map(h => ({
+      date: new Date(h.created_at).toLocaleDateString('fr-CA'),
+      prix: parseFloat(h.prix)
+    }))
+  }, [historique, ingFournisseur])
+
   function toggleSort(f) { setSort(s => ({ field:f, dir: s.field===f && s.dir==='asc' ? 'desc' : 'asc' })) }
   function sortIcon(f) { return sort.field!==f ? '↕' : sort.dir==='asc' ? '↑' : '↓' }
 
   async function openDrawer(ing) {
     setDrawerIng({...ing})
-    const { data: hist } = await supabase.from('ingredients_prix_historique').select('*').eq('ingredient_id', ing.id).order('created_at', { ascending: false })
+    const { data: hist } = await supabase.from('ingredients_prix_historique').select('*').eq('ingredient_id', ing.id).order('created_at', { ascending: true })
     const { data: rec } = await supabase.from('recette_ingredients').select('recettes(nom), grammage').eq('ingredient_id', ing.id)
     setDrawerData({ hist: hist||[], recettes: rec||[] })
   }
@@ -106,7 +132,7 @@ export default function Ingredients() {
     <div style={{ display:'flex', gap:'0' }}>
       {toast && <div style={{ position:'fixed', bottom:'24px', left:'50%', transform:'translateX(-50%)', background:'#1a1f2e', border:'1px solid rgba(0,194,255,0.3)', borderRadius:'10px', padding:'12px 24px', color:'white', fontSize:'14px', zIndex:1000 }} onClick={() => setToast(null)}>{toast}</div>}
 
-      {showFilters && (
+      {showFilters && onglet === 'liste' && (
         <div style={{ width:'220px', flexShrink:0, background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'16px', marginRight:'16px' }}>
           <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'12px' }}>
             <span style={{ fontWeight:'600', fontSize:'14px' }}>Filtres</span>
@@ -136,64 +162,178 @@ export default function Ingredients() {
           </div>
         </div>
 
-        <div style={{ display:'flex', gap:'10px', marginBottom:'16px' }}>
-          <div style={{ flex:1, position:'relative' }}>
-            <span style={{ position:'absolute', left:'12px', top:'50%', transform:'translateY(-50%)', color:'var(--muted)' }}>🔍</span>
-            <input placeholder="Rechercher..." value={search} onChange={e => { setSearch(e.target.value); setPage(1) }} style={{ width:'100%', padding:'9px 12px 9px 36px', borderRadius:'8px', border:'1px solid var(--border)', background:'var(--card)', color:'inherit', fontSize:'14px', boxSizing:'border-box' }} />
-          </div>
-          <button onClick={() => setShowFilters(!showFilters)} style={{ padding:'8px 16px', borderRadius:'8px', background: showFilters?'rgba(0,194,255,0.1)':'transparent', border:'1px solid '+(showFilters?'#00C2FF':'var(--border)'), color: showFilters?'#00C2FF':'inherit', cursor:'pointer', fontSize:'13px' }}>
-            ⚙ Filtres{activeFilters>0?' ('+activeFilters+')':''}
-          </button>
+        {/* Onglets */}
+        <div style={{ display:'flex', gap:'4px', marginBottom:'20px', borderBottom:'1px solid var(--border)', paddingBottom:'0' }}>
+          {[['liste','📋 Liste'],['fournisseurs','🏪 Fournisseurs']].map(([k,l]) => (
+            <button key={k} onClick={() => setOnglet(k)} style={{ padding:'8px 20px', borderRadius:'8px 8px 0 0', background: onglet===k ? 'var(--card)' : 'transparent', border: onglet===k ? '1px solid var(--border)' : '1px solid transparent', borderBottom: onglet===k ? '1px solid var(--card)' : '1px solid transparent', color: onglet===k ? 'inherit' : 'var(--muted)', cursor:'pointer', fontSize:'14px', marginBottom:'-1px' }}>
+              {l}
+            </button>
+          ))}
         </div>
 
-        <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', overflow:'hidden' }}>
-          <div style={{ display:'grid', gridTemplateColumns:gridCols, padding:'10px 16px', borderBottom:'1px solid var(--border)' }}>
-            {editMode && <input type="checkbox" checked={selected.length===paginated.length && paginated.length>0} onChange={e => setSelected(e.target.checked ? paginated.map(i=>i.id) : [])} style={{ cursor:'pointer' }} />}
-            {[['nom','Nom'],['categorie','Catégorie'],['fournisseur','Fournisseur'],['unite','Unité'],['prix_unitaire','Prix/kg'],['','Prix/100g']].map(([f,l]) => (
-              <span key={l} onClick={() => f && toggleSort(f)} style={{ color:'var(--muted)', fontSize:'12px', textTransform:'uppercase', letterSpacing:'1px', cursor:f?'pointer':'default' }}>
-                {l}{f?' '+sortIcon(f):''}
-              </span>
-            ))}
-            {editMode && <span style={{ color:'var(--muted)', fontSize:'12px', textTransform:'uppercase', letterSpacing:'1px' }}>Actions</span>}
-          </div>
-
-          {paginated.length===0 && <p style={{ color:'var(--muted)', textAlign:'center', padding:'32px' }}>Aucun ingrédient</p>}
-
-          {paginated.map(ing => {
-            if (!ing) return null
-            const catColor = CAT_COLORS[ing.categorie] || '#8B9BB4'
-            const isSel = selected.includes(ing.id)
-            return (
-              <div key={ing.id} style={{ display:'grid', gridTemplateColumns:gridCols, padding:'12px 16px', borderBottom:'1px solid var(--border)', alignItems:'center', background: isSel?'rgba(0,194,255,0.04)':'transparent' }}
-                onMouseEnter={e => { if(!isSel) e.currentTarget.style.background='var(--hover)' }}
-                onMouseLeave={e => { if(!isSel) e.currentTarget.style.background='transparent' }}>
-                {editMode && <input type="checkbox" checked={isSel} onChange={e => setSelected(prev => e.target.checked?[...prev,ing.id]:prev.filter(id=>id!==ing.id))} style={{ cursor:'pointer' }} />}
-                <div>
-                  <div style={{ fontWeight:'500', fontSize:'14px' }}>{ing.nom}</div>
-                  {ing.marque && <div style={{ color:'var(--muted)', fontSize:'12px' }}>{ing.marque}{ing.code_produit?' · '+ing.code_produit:''}</div>}
-                </div>
-                <span style={{ fontSize:'12px', color:catColor, fontWeight:'600' }}>{ing.categorie||'—'}</span>
-                <span style={{ color:'var(--muted)', fontSize:'13px' }}>{ing.fournisseur||'—'}</span>
-                <span style={{ color:'var(--muted)', fontSize:'13px' }}>{ing.unite}</span>
-                <span style={{ color:'#00E5A0', fontSize:'13px' }}>{parseFloat(ing.prix_unitaire).toFixed(2)}$</span>
-                <span style={{ color:'#00C2FF', fontSize:'13px' }}>{(parseFloat(ing.prix_unitaire)/10).toFixed(4)}$</span>
-                {editMode && (
-                  <div style={{ display:'flex', gap:'4px' }}>
-                    <button onClick={() => openDrawer(ing)} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'15px' }}>✏️</button>
-                    <button onClick={() => dupliquer(ing)} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'15px' }}>📋</button>
-                    <button onClick={() => supprimer(ing.id)} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'15px' }}>🗑️</button>
-                  </div>
-                )}
+        {onglet === 'liste' && (
+          <>
+            <div style={{ display:'flex', gap:'10px', marginBottom:'16px' }}>
+              <div style={{ flex:1, position:'relative' }}>
+                <span style={{ position:'absolute', left:'12px', top:'50%', transform:'translateY(-50%)', color:'var(--muted)' }}>🔍</span>
+                <input placeholder="Rechercher..." value={search} onChange={e => { setSearch(e.target.value); setPage(1) }} style={{ width:'100%', padding:'9px 12px 9px 36px', borderRadius:'8px', border:'1px solid var(--border)', background:'var(--card)', color:'inherit', fontSize:'14px', boxSizing:'border-box' }} />
               </div>
-            )
-          })}
-        </div>
+              <button onClick={() => setShowFilters(!showFilters)} style={{ padding:'8px 16px', borderRadius:'8px', background: showFilters?'rgba(0,194,255,0.1)':'transparent', border:'1px solid '+(showFilters?'#00C2FF':'var(--border)'), color: showFilters?'#00C2FF':'inherit', cursor:'pointer', fontSize:'13px' }}>
+                ⚙ Filtres{activeFilters>0?' ('+activeFilters+')':''}
+              </button>
+            </div>
 
-        {totalPages>1 && (
-          <div style={{ display:'flex', justifyContent:'center', gap:'8px', marginTop:'16px' }}>
-            <button onClick={() => setPage(p=>Math.max(1,p-1))} disabled={page===1} style={{ padding:'6px 14px', borderRadius:'6px', border:'1px solid var(--border)', background:'transparent', color:'inherit', cursor:'pointer' }}>←</button>
-            <span style={{ padding:'6px 14px', color:'var(--muted)', fontSize:'13px' }}>{page} / {totalPages}</span>
-            <button onClick={() => setPage(p=>Math.min(totalPages,p+1))} disabled={page===totalPages} style={{ padding:'6px 14px', borderRadius:'6px', border:'1px solid var(--border)', background:'transparent', color:'inherit', cursor:'pointer' }}>→</button>
+            <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', overflow:'hidden' }}>
+              <div style={{ display:'grid', gridTemplateColumns:gridCols, padding:'10px 16px', borderBottom:'1px solid var(--border)' }}>
+                {editMode && <input type="checkbox" checked={selected.length===paginated.length && paginated.length>0} onChange={e => setSelected(e.target.checked ? paginated.map(i=>i.id) : [])} style={{ cursor:'pointer' }} />}
+                {[['nom','Nom'],['categorie','Catégorie'],['fournisseur','Fournisseur'],['unite','Unité'],['prix_unitaire','Prix/kg'],['','Prix/100g']].map(([f,l]) => (
+                  <span key={l} onClick={() => f && toggleSort(f)} style={{ color:'var(--muted)', fontSize:'12px', textTransform:'uppercase', letterSpacing:'1px', cursor:f?'pointer':'default' }}>
+                    {l}{f?' '+sortIcon(f):''}
+                  </span>
+                ))}
+                {editMode && <span style={{ color:'var(--muted)', fontSize:'12px', textTransform:'uppercase', letterSpacing:'1px' }}>Actions</span>}
+              </div>
+
+              {paginated.length===0 && <p style={{ color:'var(--muted)', textAlign:'center', padding:'32px' }}>Aucun ingrédient</p>}
+
+              {paginated.map(ing => {
+                if (!ing) return null
+                const catColor = CAT_COLORS[ing.categorie] || '#8B9BB4'
+                const isSel = selected.includes(ing.id)
+                return (
+                  <div key={ing.id} style={{ display:'grid', gridTemplateColumns:gridCols, padding:'12px 16px', borderBottom:'1px solid var(--border)', alignItems:'center', background: isSel?'rgba(0,194,255,0.04)':'transparent' }}
+                    onMouseEnter={e => { if(!isSel) e.currentTarget.style.background='var(--hover)' }}
+                    onMouseLeave={e => { if(!isSel) e.currentTarget.style.background='transparent' }}>
+                    {editMode && <input type="checkbox" checked={isSel} onChange={e => setSelected(prev => e.target.checked?[...prev,ing.id]:prev.filter(id=>id!==ing.id))} style={{ cursor:'pointer' }} />}
+                    <div>
+                      <div style={{ fontWeight:'500', fontSize:'14px' }}>{ing.nom}</div>
+                      {ing.marque && <div style={{ color:'var(--muted)', fontSize:'12px' }}>{ing.marque}{ing.code_produit?' · '+ing.code_produit:''}</div>}
+                    </div>
+                    <span style={{ fontSize:'12px', color:catColor, fontWeight:'600' }}>{ing.categorie||'—'}</span>
+                    <span style={{ color:'var(--muted)', fontSize:'13px' }}>{ing.fournisseur||'—'}</span>
+                    <span style={{ color:'var(--muted)', fontSize:'13px' }}>{ing.unite}</span>
+                    <span style={{ color:'#00E5A0', fontSize:'13px' }}>{parseFloat(ing.prix_unitaire).toFixed(2)}$</span>
+                    <span style={{ color:'#00C2FF', fontSize:'13px' }}>{(parseFloat(ing.prix_unitaire)/10).toFixed(4)}$</span>
+                    {editMode && (
+                      <div style={{ display:'flex', gap:'4px' }}>
+                        <button onClick={() => openDrawer(ing)} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'15px' }}>✏️</button>
+                        <button onClick={() => dupliquer(ing)} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'15px' }}>📋</button>
+                        <button onClick={() => supprimer(ing.id)} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'15px' }}>🗑️</button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            {totalPages>1 && (
+              <div style={{ display:'flex', justifyContent:'center', gap:'8px', marginTop:'16px' }}>
+                <button onClick={() => setPage(p=>Math.max(1,p-1))} disabled={page===1} style={{ padding:'6px 14px', borderRadius:'6px', border:'1px solid var(--border)', background:'transparent', color:'inherit', cursor:'pointer' }}>←</button>
+                <span style={{ padding:'6px 14px', color:'var(--muted)', fontSize:'13px' }}>{page} / {totalPages}</span>
+                <button onClick={() => setPage(p=>Math.min(totalPages,p+1))} disabled={page===totalPages} style={{ padding:'6px 14px', borderRadius:'6px', border:'1px solid var(--border)', background:'transparent', color:'inherit', cursor:'pointer' }}>→</button>
+              </div>
+            )}
+          </>
+        )}
+
+        {onglet === 'fournisseurs' && (
+          <div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'20px', marginBottom:'24px' }}>
+              {/* Résumé par fournisseur */}
+              <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'20px' }}>
+                <p style={{ color:'var(--muted)', fontSize:'12px', marginBottom:'16px', textTransform:'uppercase', letterSpacing:'1px' }}>Résumé par fournisseur</p>
+                {fournisseurs.map(f => {
+                  const ings = ingredients.filter(i => i && i.fournisseur === f)
+                  const prixMoyen = ings.reduce((acc, i) => acc + parseFloat(i.prix_unitaire), 0) / ings.length
+                  return (
+                    <div key={f} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 0', borderBottom:'1px solid var(--border)' }}>
+                      <div>
+                        <div style={{ fontWeight:'600', fontSize:'14px' }}>{f}</div>
+                        <div style={{ color:'var(--muted)', fontSize:'12px' }}>{ings.length} produit{ings.length>1?'s':''}</div>
+                      </div>
+                      <span style={{ color:'#00E5A0', fontSize:'14px', fontWeight:'600' }}>{prixMoyen.toFixed(2)}$ moy.</span>
+                    </div>
+                  )
+                })}
+                {fournisseurs.length === 0 && <p style={{ color:'var(--muted)', fontSize:'13px' }}>Aucun fournisseur enregistré</p>}
+              </div>
+
+              {/* Historique prix */}
+              <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'20px' }}>
+                <p style={{ color:'var(--muted)', fontSize:'12px', marginBottom:'12px', textTransform:'uppercase', letterSpacing:'1px' }}>Historique des prix</p>
+                <select value={ingFournisseur} onChange={e => setIngFournisseur(e.target.value)} style={{ ...inp, marginBottom:'16px' }}>
+                  <option value=''>Choisir un ingrédient...</option>
+                  {[...new Set(ingredients.map(i => i?.nom).filter(Boolean))].sort().map(n => <option key={n}>{n}</option>)}
+                </select>
+                {historiqueFiltre.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={160}>
+                    <LineChart data={historiqueFiltre}>
+                      <XAxis dataKey="date" tick={{ fontSize:10, fill:'#8B9BB4' }} />
+                      <YAxis tick={{ fontSize:10, fill:'#8B9BB4' }} />
+                      <Tooltip contentStyle={{ background:'#1a1f2e', border:'1px solid rgba(0,194,255,0.2)', borderRadius:'8px', fontSize:'12px' }} />
+                      <Line type="monotone" dataKey="prix" stroke="#00C2FF" strokeWidth={2} dot={{ fill:'#00C2FF', r:4 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : <p style={{ color:'var(--muted)', fontSize:'13px', textAlign:'center', marginTop:'20px' }}>{ingFournisseur ? 'Aucun historique pour cet ingrédient' : 'Sélectionne un ingrédient'}</p>}
+              </div>
+            </div>
+
+            {/* Tableau comparatif */}
+            {comparaisonData.length > 0 && (
+              <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'20px', marginBottom:'24px' }}>
+                <p style={{ color:'var(--muted)', fontSize:'12px', marginBottom:'16px', textTransform:'uppercase', letterSpacing:'1px' }}>Comparaison prix par fournisseur</p>
+                <div style={{ overflowX:'auto' }}>
+                  <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'13px' }}>
+                    <thead>
+                      <tr style={{ borderBottom:'1px solid var(--border)' }}>
+                        <th style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'left', fontWeight:'600' }}>Ingrédient</th>
+                        {fournisseurs.map(f => <th key={f} style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'right', fontWeight:'600' }}>{f}</th>)}
+                        <th style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'right', fontWeight:'600' }}>Meilleur prix</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {comparaisonData.map((row, i) => {
+                        const prix = fournisseurs.map(f => row[f]).filter(Boolean)
+                        const min = Math.min(...prix)
+                        return (
+                          <tr key={i} style={{ borderBottom:'1px solid var(--border)' }}>
+                            <td style={{ padding:'10px 12px', fontWeight:'500' }}>{row.nom}</td>
+                            {fournisseurs.map(f => (
+                              <td key={f} style={{ padding:'10px 12px', textAlign:'right', color: row[f] === min ? '#00E5A0' : 'inherit', fontWeight: row[f] === min ? '700' : '400' }}>
+                                {row[f] ? row[f].toFixed(2)+'$' : '—'}
+                              </td>
+                            ))}
+                            <td style={{ padding:'10px 12px', textAlign:'right', color:'#00E5A0', fontWeight:'700' }}>{min.toFixed(2)}$</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Graphique barres */}
+            {comparaisonData.length > 0 && fournisseurs.length > 1 && (
+              <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'20px' }}>
+                <p style={{ color:'var(--muted)', fontSize:'12px', marginBottom:'16px', textTransform:'uppercase', letterSpacing:'1px' }}>Graphique comparatif</p>
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={comparaisonData.slice(0,10)}>
+                    <XAxis dataKey="nom" tick={{ fontSize:10, fill:'#8B9BB4' }} />
+                    <YAxis tick={{ fontSize:10, fill:'#8B9BB4' }} />
+                    <Tooltip contentStyle={{ background:'#1a1f2e', border:'1px solid rgba(0,194,255,0.2)', borderRadius:'8px', fontSize:'12px' }} />
+                    <Legend wrapperStyle={{ fontSize:'12px' }} />
+                    {fournisseurs.map((f, i) => <Bar key={f} dataKey={f} fill={FOURNISSEUR_COLORS[i % FOURNISSEUR_COLORS.length]} radius={[4,4,0,0]} />)}
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+            {comparaisonData.length === 0 && (
+              <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'48px', textAlign:'center' }}>
+                <p style={{ color:'var(--muted)', fontSize:'14px' }}>Aucune comparaison disponible — ajoutez le même ingrédient chez plusieurs fournisseurs pour voir la comparaison</p>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -246,13 +386,14 @@ export default function Ingredients() {
           {drawerData?.hist?.length > 0 && (
             <div>
               <p style={{ color:'var(--muted)', fontSize:'11px', marginBottom:'8px', textTransform:'uppercase' }}>Historique des prix</p>
-              {drawerData.hist.slice(0,10).map((h,i) => (
-                <div key={i} style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', padding:'6px 0', borderBottom:'1px solid var(--border)', fontSize:'12px' }}>
-                  <span style={{ color:'#00E5A0' }}>{parseFloat(h.prix).toFixed(2)}$</span>
-                  <span style={{ color:'var(--muted)' }}>{h.source}</span>
-                  <span style={{ color:'var(--muted)' }}>{new Date(h.created_at).toLocaleDateString('fr-CA')}</span>
-                </div>
-              ))}
+              <ResponsiveContainer width="100%" height={120}>
+                <LineChart data={drawerData.hist.map(h => ({ date: new Date(h.created_at).toLocaleDateString('fr-CA'), prix: parseFloat(h.prix) }))}>
+                  <XAxis dataKey="date" tick={{ fontSize:9, fill:'#8B9BB4' }} />
+                  <YAxis tick={{ fontSize:9, fill:'#8B9BB4' }} />
+                  <Tooltip contentStyle={{ background:'#1a1f2e', border:'1px solid rgba(0,194,255,0.2)', borderRadius:'8px', fontSize:'11px' }} />
+                  <Line type="monotone" dataKey="prix" stroke="#00C2FF" strokeWidth={2} dot={{ fill:'#00C2FF', r:3 }} />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           )}
         </div>
