@@ -1,10 +1,13 @@
 import OpenAI from 'openai'
-import { getUser } from '../../../lib/supabase-server'
+import { getSupabase, checkRateLimit } from '../../../lib/supabase-server'
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
 export async function POST(req) {
-  if (!(await getUser())) return Response.json({ error: 'Non autorisé' }, { status: 401 })
+  const supabase = await getSupabase()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return Response.json({ error: 'Non autorisé' }, { status: 401 })
+  if (!(await checkRateLimit(supabase, user.id, 'prix', 20, 60))) return Response.json({ error: 'Trop de requêtes, réessaie dans un moment' }, { status: 429 })
   try {
     const { nom, cout, positionnement, style_cuisine, clientele, ville, prix_concurrents, prix_max } = await req.json()
 

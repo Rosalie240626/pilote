@@ -1,10 +1,14 @@
 import Anthropic from '@anthropic-ai/sdk'
-import { getUser } from '../../../lib/supabase-server'
+import { getSupabase, checkRateLimit } from '../../../lib/supabase-server'
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
 export const maxDuration = 60
 
 export async function POST(req) {
+  const supabase = await getSupabase()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return Response.json({ error: 'Non autorisé' }, { status: 401 })
+  if (!(await checkRateLimit(supabase, user.id, 'facture', 15, 60))) return Response.json({ error: 'Trop de requêtes, réessaie dans un moment' }, { status: 429 })
   try {
     const { image } = await req.json()
     const base64 = image.split(',')[1]
