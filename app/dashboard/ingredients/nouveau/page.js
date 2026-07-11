@@ -1,3 +1,4 @@
+cat > app/dashboard/ingredients/nouveau/page.js << 'EOF'
 'use client'
 import { useState, useEffect } from 'react'
 import { createClient } from '../../../../lib/supabase'
@@ -6,7 +7,7 @@ import { useRouter } from 'next/navigation'
 const CATEGORIES = ['Viandes','Produits laitiers','Légumes','Fruits','Épicerie','Boissons','Surgelés','Boulangerie','Poissons','Laitiers','Produits secs','Frais','Congelés','Autre']
 
 export default function NouvelIngredient() {
-  const [form, setForm] = useState({ nom:'', marque:'', code_produit:'', categorie:'', fournisseur:'', fournisseur_prefere:'', unite:'kg', prix_unitaire:'', prix_achat:'', qte_achetee:'', notes:'' })
+  const [form, setForm] = useState({ nom:'', marque:'', code_produit:'', categorie:'', fournisseur:'', fournisseur_prefere:'', unite:'kg', format_achat:'', prix_unitaire:'', prix_achat:'', qte_achetee:'', notes:'' })
   const [orgId, setOrgId] = useState(null)
   const [loading, setLoading] = useState(false)
   const supabase = createClient()
@@ -23,9 +24,10 @@ export default function NouvelIngredient() {
   }
 
   async function sauvegarder() {
-    if (!form.nom || !form.prix_unitaire) return
+    if (!form.nom || (!form.prix_unitaire && !(form.prix_achat && form.qte_achetee))) return
     setLoading(true)
-    await supabase.from('ingredients').insert({ ...form, organization_id: orgId, prix_unitaire: parseFloat(form.prix_unitaire), prix_achat: form.prix_achat ? parseFloat(form.prix_achat) : null })
+    const prix_unitaire = form.prix_achat && form.qte_achetee ? parseFloat(form.prix_achat)/parseFloat(form.qte_achetee) : parseFloat(form.prix_unitaire)
+    await supabase.from('ingredients').insert({ ...form, organization_id: orgId, prix_unitaire, prix_achat: form.prix_achat ? parseFloat(form.prix_achat) : null, qte_achetee: form.qte_achetee ? parseFloat(form.qte_achetee) : null })
     router.push('/dashboard/ingredients')
   }
 
@@ -75,10 +77,12 @@ export default function NouvelIngredient() {
               {['kg','g','L','ml','unité','portion'].map(u => <option key={u}>{u}</option>)}
             </select>
           </div>
-          <div><label style={{ color:'var(--muted)', fontSize:'12px', display:'block', marginBottom:'4px' }}>Prix/unité * ($)</label><input type="number" value={form.prix_unitaire} onChange={e => setForm({...form, prix_unitaire:e.target.value})} style={inp} /></div>
+          <div><label style={{ color:'var(--muted)', fontSize:'12px', display:'block', marginBottom:'4px' }}>Prix/unité ($) — ou remplis Prix achat + Qté ci-dessous</label><input type="number" value={form.prix_unitaire} onChange={e => setForm({...form, prix_unitaire:e.target.value})} style={inp} /></div>
           <div><label style={{ color:'var(--muted)', fontSize:'12px', display:'block', marginBottom:'4px' }}>Prix achat ($)</label><input type="number" value={form.prix_achat} onChange={e => setForm({...form, prix_achat:e.target.value})} style={inp} /></div>
         </div>
-        <div><label style={{ color:'var(--muted)', fontSize:'12px', display:'block', marginBottom:'4px' }}>Qté achetée</label><input placeholder="Ex: caisse 10kg" value={form.qte_achetee} onChange={e => setForm({...form, qte_achetee:e.target.value})} style={inp} /></div>
+        <div><label style={{ color:'var(--muted)', fontSize:'12px', display:'block', marginBottom:'4px' }}>Qté achetée</label><input placeholder="Ex: 10 (en kg)" value={form.qte_achetee} onChange={e => setForm({...form, qte_achetee:e.target.value})} style={inp} /></div>
+        <div style={{ marginTop:'12px' }}><label style={{ color:'var(--muted)', fontSize:'12px', display:'block', marginBottom:'4px' }}>Format d'achat (description)</label><input placeholder="Ex: poche 20kg, 4 paquets de 3" value={form.format_achat} onChange={e => setForm({...form, format_achat:e.target.value})} style={inp} /></div>
+        {form.prix_achat && form.qte_achetee && <p style={{ color:'var(--muted)', fontSize:'12px', marginTop:'10px' }}>Prix/{form.unite} calculé : <span style={{ color:'#00E5A0', fontWeight:'700' }}>{(parseFloat(form.prix_achat)/parseFloat(form.qte_achetee)).toFixed(4)}$</span></p>}
       </div>
 
       <div style={card}>
@@ -86,9 +90,11 @@ export default function NouvelIngredient() {
         <textarea value={form.notes} onChange={e => setForm({...form, notes:e.target.value})} rows={3} style={{ ...inp, resize:'vertical' }} />
       </div>
 
-      <button onClick={sauvegarder} disabled={loading || !form.nom || !form.prix_unitaire} style={{ width:'100%', padding:'12px', borderRadius:'8px', background: form.nom && form.prix_unitaire ? '#00C2FF' : 'var(--border)', color: form.nom && form.prix_unitaire ? '#0A0F1E' : 'var(--muted)', fontWeight:'700', border:'none', cursor: form.nom && form.prix_unitaire ? 'pointer' : 'default' }}>
+      <button onClick={sauvegarder} disabled={loading || !form.nom || (!form.prix_unitaire && !(form.prix_achat && form.qte_achetee))} style={{ width:'100%', padding:'12px', borderRadius:'8px', background: form.nom && (form.prix_unitaire || (form.prix_achat && form.qte_achetee)) ? '#00C2FF' : 'var(--border)', color: form.nom && (form.prix_unitaire || (form.prix_achat && form.qte_achetee)) ? '#0A0F1E' : 'var(--muted)', fontWeight:'700', border:'none', cursor: form.nom ? 'pointer' : 'default' }}>
         {loading ? 'Sauvegarde...' : 'Sauvegarder'}
       </button>
     </div>
   )
 }
+EOF
+echo "✅ nouveau/page.js remplacé"

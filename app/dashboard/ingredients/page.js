@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { createClient } from '../../../lib/supabase'
 import { useRouter } from 'next/navigation'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts'
+import * as XLSX from 'xlsx'
 
 const CATEGORIES = ['Viandes','Produits laitiers','Légumes','Fruits','Épicerie','Boissons','Surgelés','Boulangerie','Poissons','Autre']
 const CAT_COLORS = { 'Viandes':'#FF4D6D','Produits laitiers':'#F5A623','Légumes':'#00E5A0','Fruits':'#FF8C42','Épicerie':'#00C2FF','Boissons':'#B47FFF','Surgelés':'#64B5F6','Boulangerie':'#FFD54F','Poissons':'#4FC3F7','Autre':'#8B9BB4' }
@@ -76,7 +77,7 @@ export default function Ingredients() {
     const groupes = [...new Set(ingredients.filter(Boolean).map(i => i.ingredient_base || i.nom))]
     return groupes.map(groupe => {
       const row = { nom: groupe }
-      ingredients.filter(i => i && (i.ingredient_base || i.nom) === groupe).forEach(i => { if (i.fournisseur) row[i.fournisseur] = parseFloat(i.prix_unitaire) })
+      ingredients.filter(i => i && (i.ingredient_base || i.nom) === groupe).forEach(i => { if (i.fournisseur) { row[i.fournisseur] = parseFloat(i.prix_unitaire); row[i.fournisseur+'_format'] = i.format_achat } })
       return row
     }).filter(r => Object.keys(r).length > 2)
   }, [ingredients])
@@ -100,13 +101,16 @@ export default function Ingredients() {
   }
 
   async function saveDrawer() {
-    await supabase.from('ingredients').update(drawerIng).eq('id', drawerIng.id)
+    const d = { ...drawerIng }
+    if (d.prix_achat && d.qte_achetee) d.prix_unitaire = parseFloat(d.prix_achat) / parseFloat(d.qte_achetee)
+    await supabase.from('ingredients').update(d).eq('id', d.id)
     await reload()
     setDrawerIng(null)
     setToast('✓ Sauvegardé')
   }
 
   async function supprimer(id) {
+    if (!confirm('Supprimer cet ingrédient ?')) return
     await supabase.from('ingredients').delete().eq('id', id)
     setIngredients(prev => prev.filter(i => i.id !== id))
     setToast('Supprimé')
@@ -119,12 +123,48 @@ export default function Ingredients() {
     setToast('Dupliqué')
   }
 
+  async function importExcel(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    const buf = await file.arrayBuffer()
+    const wb = XLSX.read(buf, { type: 'array' })
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]])
+    const toInsert = rows.filter(r => r.nom).map(r => ({
+      organization_id: orgId,
+      nom: String(r.nom),
+      marque: r.marque ? String(r.marque) : null,
+      code_produit: r.code_produit ? String(r.code_produit) : null,
+      categorie: r.categorie || null,
+      fournisseur: r.fournisseur || null,
+      unite: r.unite || 'unité',
+      prix_unitaire: parseFloat(r.prix_unitaire) || 0,
+      prix_achat: parseFloat(r.prix_achat) || null,
+      qte_achetee: parseFloat(r.qte_achetee) || null,
+      notes: r.notes ? String(r.notes) : null,
+      archived: false,
+    }))
+    e.target.value = ''
+    if (!toInsert.length) return setToast('Aucune ligne valide trouvée')
+    const { data, error } = await supabase.from('ingredients').insert(toInsert).select()
+    if (error) return setToast('Erreur import: ' + error.message)
+    await reload()
+    setToast(`✓ ${data.length} ingrédients importés`)
+  }
+
   async function exportCSV() {
     const rows = [['Nom','Marque','Code','Catégorie','Fournisseur','Unité','Prix/kg','Prix/100g']]
     filtered.forEach(i => rows.push([i.nom,i.marque||'',i.code_produit||'',i.categorie||'',i.fournisseur||'',i.unite,parseFloat(i.prix_unitaire).toFixed(2),(parseFloat(i.prix_unitaire)/10).toFixed(4)]))
     const csv = rows.map(r => r.map(c => '"'+c+'"').join(',')).join('\n')
     const a = document.createElement('a'); a.href = 'data:text/csv;charset=utf-8,\uFEFF'+encodeURIComponent(csv); a.download = 'ingredients.csv'; a.click()
     setToast('Export téléchargé')
+  }
+
+  function petitPrix(ing) {
+    const p = parseFloat(ing.prix_unitaire)
+    if (!p) return '—'
+    if (ing.unite === 'kg') return (p/10).toFixed(3)+'$/100g'
+    if (ing.unite === 'L') return (p/10).toFixed(3)+'$/100ml'
+    return '—'
   }
 
   const inp = { width:'100%', padding:'7px 10px', borderRadius:'6px', border:'1px solid var(--border)', background:'transparent', color:'inherit', fontSize:'13px', boxSizing:'border-box' }
@@ -159,6 +199,8 @@ export default function Ingredients() {
           <div style={{ display:'flex', gap:'8px' }}>
             <button onClick={exportCSV} style={{ padding:'8px 14px', borderRadius:'8px', background:'transparent', border:'1px solid var(--border)', color:'inherit', cursor:'pointer', fontSize:'13px' }}>⬇ Export</button>
             <button onClick={() => router.push('/dashboard/ingredients/import')} style={{ padding:'8px 14px', borderRadius:'8px', background:'transparent', border:'1px solid var(--border)', color:'inherit', cursor:'pointer', fontSize:'13px' }}>📸 Importer</button>
+            <input id="excel-input" type="file" accept=".xlsx,.xls" onChange={importExcel} style={{ display:'none' }} />
+            <button onClick={() => document.getElementById('excel-input').click()} style={{ padding:'8px 14px', borderRadius:'8px', background:'transparent', border:'1px solid var(--border)', color:'inherit', cursor:'pointer', fontSize:'13px' }}>📊 Importer Excel</button>
             <button onClick={() => setEditMode(!editMode)} style={{ padding:'8px 14px', borderRadius:'8px', background: editMode?'rgba(0,194,255,0.1)':'transparent', border:'1px solid '+(editMode?'#00C2FF':'var(--border)'), color: editMode?'#00C2FF':'inherit', cursor:'pointer', fontSize:'13px' }}>✏️ Modifier</button>
             <button onClick={() => router.push('/dashboard/ingredients/nouveau')} style={{ padding:'8px 16px', borderRadius:'8px', background:'#00C2FF', color:'#0A0F1E', fontWeight:'700', border:'none', cursor:'pointer', fontSize:'13px' }}>+ Ajouter</button>
           </div>
@@ -188,7 +230,7 @@ export default function Ingredients() {
             <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', overflow:'hidden' }}>
               <div style={{ display:'grid', gridTemplateColumns:gridCols, padding:'10px 16px', borderBottom:'1px solid var(--border)' }}>
                 {editMode && <input type="checkbox" checked={selected.length===paginated.length && paginated.length>0} onChange={e => setSelected(e.target.checked ? paginated.map(i=>i.id) : [])} style={{ cursor:'pointer' }} />}
-                {[['nom','Nom'],['categorie','Catégorie'],['fournisseur','Fournisseur'],['unite','Unité'],['prix_unitaire','Prix/kg'],['','Prix/100g']].map(([f,l]) => (
+                {[['nom','Nom'],['categorie','Catégorie'],['fournisseur','Fournisseur'],['unite','Unité'],['prix_unitaire','Prix/unité'],['','Détail']].map(([f,l]) => (
                   <span key={l} onClick={() => f && toggleSort(f)} style={{ color:'var(--muted)', fontSize:'12px', textTransform:'uppercase', letterSpacing:'1px', cursor:f?'pointer':'default' }}>
                     {l}{f?' '+sortIcon(f):''}
                   </span>
@@ -209,13 +251,13 @@ export default function Ingredients() {
                     {editMode && <input type="checkbox" checked={isSel} onChange={e => setSelected(prev => e.target.checked?[...prev,ing.id]:prev.filter(id=>id!==ing.id))} style={{ cursor:'pointer' }} />}
                     <div>
                       <div style={{ fontWeight:'500', fontSize:'14px' }}>{ing.nom}{ing.ingredient_base && <span title={'Groupe: '+ing.ingredient_base} style={{ marginLeft:'8px', fontSize:'10px', padding:'2px 6px', borderRadius:'4px', background:'rgba(0,194,255,0.12)', color:'#00C2FF' }}>🔗 {ing.ingredient_base}</span>}</div>
-                      {ing.marque && <div style={{ color:'var(--muted)', fontSize:'12px' }}>{ing.marque}{ing.code_produit?' · '+ing.code_produit:''}</div>}
+                      {ing.marque && <div style={{ color:'var(--muted)', fontSize:'12px' }}>{ing.marque}{ing.code_produit?' · '+ing.code_produit:''}{ing.format_achat?' · '+ing.format_achat:''}</div>}
                     </div>
                     <span style={{ fontSize:'12px', color:catColor, fontWeight:'600' }}>{ing.categorie||'—'}</span>
                     <span style={{ color:'var(--muted)', fontSize:'13px' }}>{ing.fournisseur||'—'}</span>
                     <span style={{ color:'var(--muted)', fontSize:'13px' }}>{ing.unite}</span>
                     <span style={{ color:'#00E5A0', fontSize:'13px' }}>{parseFloat(ing.prix_unitaire).toFixed(2)}$</span>
-                    <span style={{ color:'#00C2FF', fontSize:'13px' }}>{(parseFloat(ing.prix_unitaire)/10).toFixed(4)}$</span>
+                    <span style={{ color:'#00C2FF', fontSize:'13px' }}>{petitPrix(ing)}</span>
                     {editMode && (
                       <div style={{ display:'flex', gap:'4px' }}>
                         <button onClick={() => openDrawer(ing)} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'15px' }}>✏️</button>
@@ -302,7 +344,7 @@ export default function Ingredients() {
                             <td style={{ padding:'10px 12px', fontWeight:'500' }}>{row.nom}</td>
                             {fournisseurs.map(f => (
                               <td key={f} style={{ padding:'10px 12px', textAlign:'right', color: row[f] === min ? '#00E5A0' : 'inherit', fontWeight: row[f] === min ? '700' : '400' }}>
-                                {row[f] ? row[f].toFixed(2)+'$' : '—'}
+                                {row[f] ? <>{row[f].toFixed(2)}$<br/>{row[f+'_format'] && <span style={{ fontSize:'11px', color:'var(--muted)', fontWeight:'400' }}>{row[f+'_format']}</span>}</> : '—'}
                               </td>
                             ))}
                             <td style={{ padding:'10px 12px', textAlign:'right', color:'#00E5A0', fontWeight:'700' }}>{min.toFixed(2)}$</td>
@@ -366,16 +408,31 @@ export default function Ingredients() {
           </div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom:'10px' }}>
             <div>
-              <label style={{ color:'var(--muted)', fontSize:'11px', display:'block', marginBottom:'3px', textTransform:'uppercase' }}>Unité</label>
+              <label style={{ color:'var(--muted)', fontSize:'11px', display:'block', marginBottom:'3px', textTransform:'uppercase' }}>Unité de base</label>
               <select value={drawerIng.unite||'kg'} onChange={e => setDrawerIng({...drawerIng,unite:e.target.value})} style={inp}>
                 {['kg','g','L','ml','unité','portion'].map(u => <option key={u}>{u}</option>)}
               </select>
             </div>
             <div>
-              <label style={{ color:'var(--muted)', fontSize:'11px', display:'block', marginBottom:'3px', textTransform:'uppercase' }}>Prix ($)</label>
-              <input type="number" value={drawerIng.prix_unitaire||''} onChange={e => setDrawerIng({...drawerIng,prix_unitaire:e.target.value})} style={inp} />
+              <label style={{ color:'var(--muted)', fontSize:'11px', display:'block', marginBottom:'3px', textTransform:'uppercase' }}>Format d'achat</label>
+              <input value={drawerIng.format_achat||''} onChange={e => setDrawerIng({...drawerIng,format_achat:e.target.value})} placeholder="ex: poche 20kg, 4x3 unités" style={inp} />
             </div>
           </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom:'6px' }}>
+            <div>
+              <label style={{ color:'var(--muted)', fontSize:'11px', display:'block', marginBottom:'3px', textTransform:'uppercase' }}>Prix d'achat ($)</label>
+              <input type="number" value={drawerIng.prix_achat||''} onChange={e => setDrawerIng({...drawerIng,prix_achat:e.target.value})} style={inp} />
+            </div>
+            <div>
+              <label style={{ color:'var(--muted)', fontSize:'11px', display:'block', marginBottom:'3px', textTransform:'uppercase' }}>Qté achetée (en {drawerIng.unite||'kg'})</label>
+              <input type="number" value={drawerIng.qte_achetee||''} onChange={e => setDrawerIng({...drawerIng,qte_achetee:e.target.value})} style={inp} />
+            </div>
+          </div>
+          <p style={{ color:'var(--muted)', fontSize:'12px', marginBottom:'16px' }}>
+            Prix/{drawerIng.unite||'kg'} calculé : <span style={{ color:'#00E5A0', fontWeight:'700' }}>
+              {drawerIng.prix_achat && drawerIng.qte_achetee ? (parseFloat(drawerIng.prix_achat)/parseFloat(drawerIng.qte_achetee)).toFixed(4) : parseFloat(drawerIng.prix_unitaire||0).toFixed(4)}$
+            </span>
+          </p>
           <div style={{ marginBottom:'16px' }}>
             <label style={{ color:'var(--muted)', fontSize:'11px', display:'block', marginBottom:'3px', textTransform:'uppercase' }}>Notes</label>
             <textarea value={drawerIng.notes||''} onChange={e => setDrawerIng({...drawerIng,notes:e.target.value})} rows={3} style={{...inp,resize:'vertical'}} />

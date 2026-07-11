@@ -1,0 +1,52 @@
+--- a/app/dashboard/ingredients/page.js
++++ b/app/dashboard/ingredients/page.js
+@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo } from 'react'
+ import { createClient } from '../../../lib/supabase'
+ import { useRouter } from 'next/navigation'
+ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts'
++import * as XLSX from 'xlsx'
+ 
+ const CATEGORIES = ['Viandes','Produits laitiers','Légumes','Fruits','Épicerie','Boissons','Surgelés','Boulangerie','Poissons','Autre']
+--- a/app/dashboard/ingredients/page.js
++++ b/app/dashboard/ingredients/page.js
+@@ -117,6 +118,34 @@ export default function Ingredients() {
+     setToast('Dupliqué')
+   }
+ 
++  async function importExcel(e) {
++    const file = e.target.files[0]
++    if (!file) return
++    const buf = await file.arrayBuffer()
++    const wb = XLSX.read(buf, { type: 'array' })
++    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]])
++    const toInsert = rows.filter(r => r.nom).map(r => ({
++      organization_id: orgId,
++      nom: String(r.nom),
++      marque: r.marque ? String(r.marque) : null,
++      code_produit: r.code_produit ? String(r.code_produit) : null,
++      categorie: r.categorie || null,
++      fournisseur: r.fournisseur || null,
++      unite: r.unite || 'unité',
++      prix_unitaire: parseFloat(r.prix_unitaire) || 0,
++      prix_achat: parseFloat(r.prix_achat) || null,
++      qte_achetee: parseFloat(r.qte_achetee) || null,
++      notes: r.notes ? String(r.notes) : null,
++      archived: false,
++    }))
++    e.target.value = ''
++    if (!toInsert.length) return setToast('Aucune ligne valide trouvée')
++    const { data, error } = await supabase.from('ingredients').insert(toInsert).select()
++    if (error) return setToast('Erreur import: ' + error.message)
++    await reload()
++    setToast(`✓ ${data.length} ingrédients importés`)
++  }
++
+   async function exportCSV() {
+--- a/app/dashboard/ingredients/page.js
++++ b/app/dashboard/ingredients/page.js
+@@ -160,6 +189,8 @@ export default function Ingredients() {
+             <button onClick={() => router.push('/dashboard/ingredients/import')} style={{ padding:'8px 14px', borderRadius:'8px', background:'transparent', border:'1px solid var(--border)', color:'inherit', cursor:'pointer', fontSize:'13px' }}>📸 Importer</button>
++            <input id="excel-input" type="file" accept=".xlsx,.xls" onChange={importExcel} style={{ display:'none' }} />
++            <button onClick={() => document.getElementById('excel-input').click()} style={{ padding:'8px 14px', borderRadius:'8px', background:'transparent', border:'1px solid var(--border)', color:'inherit', cursor:'pointer', fontSize:'13px' }}>📊 Importer Excel</button>
+             <button onClick={() => setEditMode(!editMode)} style={{ padding:'8px 14px', borderRadius:'8px', background: editMode?'rgba(0,194,255,0.1)':'transparent', border:'1px solid '+(editMode?'#00C2FF':'var(--border)'), color: editMode?'#00C2FF':'inherit', cursor:'pointer', fontSize:'13px' }}>✏️ Modifier</button>
+             <button onClick={() => router.push('/dashboard/ingredients/nouveau')} style={{ padding:'8px 16px', borderRadius:'8px', background:'#00C2FF', color:'#0A0F1E', fontWeight:'700', border:'none', cursor:'pointer', fontSize:'13px' }}>+ Ajouter</button>
