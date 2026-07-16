@@ -25,6 +25,7 @@ export default function Ingredients() {
   const [showFilters, setShowFilters] = useState(false)
   const [onglet, setOnglet] = useState('liste')
   const [ingFournisseur, setIngFournisseur] = useState('')
+  const [recetteIngredients, setRecetteIngredients] = useState([])
   const perPage = 25
   const supabase = createClient()
   const router = useRouter()
@@ -41,6 +42,8 @@ export default function Ingredients() {
     setIngredients((data || []).filter(Boolean))
     const { data: hist } = await supabase.from('ingredients_prix_historique').select('*, ingredients(nom, fournisseur)').order('created_at', { ascending: true })
     setHistorique(hist || [])
+    const { data: ri } = await supabase.from('recette_ingredients').select('ingredient_id, grammage')
+    setRecetteIngredients(ri || [])
   }
 
   async function reload() {
@@ -77,10 +80,12 @@ export default function Ingredients() {
     const groupes = [...new Set(ingredients.filter(Boolean).map(i => i.ingredient_base || i.nom))]
     return groupes.map(groupe => {
       const row = { nom: groupe }
-      ingredients.filter(i => i && (i.ingredient_base || i.nom) === groupe).forEach(i => { if (i.fournisseur) { row[i.fournisseur] = parseFloat(i.prix_unitaire); row[i.fournisseur+'_format'] = i.format_achat } })
+      const items = ingredients.filter(i => i && (i.ingredient_base || i.nom) === groupe)
+      row.categorie = items[0]?.categorie || ''
+      items.forEach(i => { if (i.fournisseur) { row[i.fournisseur] = parseFloat(i.prix_unitaire); row[i.fournisseur+'_format'] = i.format_achat } })
       return row
-    }).filter(r => Object.keys(r).length > 2)
-  }, [ingredients])
+    }).filter(r => fournisseurs.some(f => r[f] != null))
+  }, [ingredients, fournisseurs])
 
   const historiqueFiltre = useMemo(() => {
     if (!ingFournisseur) return []
@@ -89,6 +94,140 @@ export default function Ingredients() {
       prix: parseFloat(h.prix)
     }))
   }, [historique, ingFournisseur])
+
+  const [analyseMode, setAnalyseMode] = useState('produit')
+  const [groupeSelectionne, setGroupeSelectionne] = useState('')
+  const [fournisseurSelectionne, setFournisseurSelectionne] = useState('')
+  const [indiceExterne, setIndiceExterne] = useState(null)
+
+  const groupesDisponibles = useMemo(() => [...new Set(ingredients.map(i => i?.ingredient_base || i?.nom).filter(Boolean))].sort(), [ingredients])
+
+  function calculerForecast(rows) {
+    if (rows.length < 2) return null
+    const sorted = [...rows].sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+    const premier = sorted[0], dernier = sorted[sorted.length - 1]
+    const jours = (new Date(dernier.created_at) - new Date(premier.created_at)) / 86400000
+    if (jours < 14 || !parseFloat(premier.prix)) return null
+    const tauxAnnuel = Math.pow(parseFloat(dernier.prix) / parseFloat(premier.prix), 365 / jours) - 1
+    return { tauxAnnuel, prixActuel: parseFloat(dernier.prix), prixEstime: parseFloat(dernier.prix) * (1 + tauxAnnuel), jours: Math.round(jours) }
+  }
+
+  const comparaisonGroupeData = useMemo(() => {
+    if (!groupeSelectionne) return { chart: [], fournisseursGroupe: [], forecast: null }
+    const idsGroupe = ingredients.filter(i => (i.ingredient_base || i.nom) === groupeSelectionne).map(i => i.id)
+    const rows = historique.filter(h => idsGroupe.includes(h.ingredient_id))
+    const fournisseursGroupe = [...new Set(rows.map(h => h.fournisseur || h.ingredients?.fournisseur || 'Inconnu'))]
+    const dates = [...new Set(rows.map(h => new Date(h.created_at).toLocaleDateString('fr-CA')))].sort((a,b) => new Date(a)-new Date(b))
+    const chart = dates.map(date => {
+      const point = { date }
+      rows.filter(h => new Date(h.created_at).toLocaleDateString('fr-CA') === date).forEach(h => { point[h.fournisseur || h.ingredients?.fournisseur || 'Inconnu'] = parseFloat(h.prix) })
+      return point
+    })
+    return { chart, fournisseursGroupe, forecast: calculerForecast(rows) }
+  }, [historique, ingredients, groupeSelectionne])
+
+  const produitsDuFournisseur = useMemo(() => {
+    if (!fournisseurSelectionne) return []
+    const ings = ingredients.filter(i => i.fournisseur === fournisseurSelectionne)
+    return ings.map(ing => {
+      const rows = historique.filter(h => h.ingredient_id === ing.id)
+      const groupe = ing.ingredient_base ? ingredients.filter(i => i.ingredient_base === ing.ingredient_base) : []
+      const moinsCher = groupe.reduce((min, i) => parseFloat(i.prix_unitaire) < parseFloat(min.prix_unitaire) ? i : min, ing)
+      return { ing, forecast: calculerForecast(rows), alternative: moinsCher.id !== ing.id ? moinsCher : null }
+    })
+  }, [historique, ingredients, fournisseurSelectionne])
+
+  useEffect(() => {
+    if (!groupeSelectionne) { setIndiceExterne(null); return }
+    const ing = ingredients.find(i => (i.ingredient_base || i.nom) === groupeSelectionne)
+    if (!ing?.categorie) { setIndiceExterne(null); return }
+    fetch('/api/indices?categorie=' + encodeURIComponent(ing.categorie))
+      .then(r => r.json())
+      .then(d => setIndiceExterne(d.error ? null : d))
+      .catch(() => setIndiceExterne(null))
+  }, [groupeSelectionne, ingredients])
+
+  const [searchFiche, setSearchFiche] = useState('')
+  const [categorieFiche, setCategorieFiche] = useState('')
+  const [searchComparatif, setSearchComparatif] = useState('')
+  const [categorieComparatif, setCategorieComparatif] = useState('')
+
+  const groupesAvecCategorie = useMemo(() => groupesDisponibles.map(g => {
+    const ing = ingredients.find(i => (i.ingredient_base || i.nom) === g)
+    return { nom: g, categorie: ing?.categorie || '' }
+  }), [groupesDisponibles, ingredients])
+
+  const produitsListe = useMemo(() => groupesAvecCategorie.filter(g =>
+    (!searchFiche || g.nom.toLowerCase().includes(searchFiche.toLowerCase())) &&
+    (!categorieFiche || g.categorie === categorieFiche)
+  ), [groupesAvecCategorie, searchFiche, categorieFiche])
+
+  const fournisseursListe = useMemo(() => fournisseurs.filter(f => !searchFiche || f.toLowerCase().includes(searchFiche.toLowerCase())), [fournisseurs, searchFiche])
+
+  const statsGroupe = useMemo(() => {
+    if (!groupeSelectionne) return null
+    const items = ingredients.filter(i => (i.ingredient_base || i.nom) === groupeSelectionne)
+    const prix = items.map(i => parseFloat(i.prix_unitaire)).filter(p => !isNaN(p))
+    const classement = [...items].sort((a,b) => parseFloat(a.prix_unitaire) - parseFloat(b.prix_unitaire))
+    const idsGroupe = items.map(i => i.id)
+    const rowsHist = historique.filter(h => idsGroupe.includes(h.ingredient_id))
+    const dernierAchat = rowsHist.length ? rowsHist.reduce((max, h) => new Date(h.created_at) > new Date(max) ? h.created_at : max, rowsHist[0].created_at) : null
+    return {
+      nbFournisseurs: new Set(items.map(i => i.fournisseur).filter(Boolean)).size,
+      meilleurPrix: prix.length ? Math.min(...prix) : null,
+      prixMoyen: prix.length ? prix.reduce((a,b) => a+b, 0) / prix.length : null,
+      unite: items[0]?.unite || '',
+      classement,
+      dernierAchat
+    }
+  }, [ingredients, historique, groupeSelectionne])
+
+  const [detailIngredientId, setDetailIngredientId] = useState(null)
+
+  useEffect(() => { setDetailIngredientId(null) }, [groupeSelectionne])
+
+  const detailHistorique = useMemo(() => {
+    if (!detailIngredientId) return []
+    return historique.filter(h => h.ingredient_id === detailIngredientId).sort((a,b) => new Date(a.created_at) - new Date(b.created_at))
+  }, [historique, detailIngredientId])
+
+  const economiePotentielle = useMemo(() => {
+    if (!groupeSelectionne || !statsGroupe?.meilleurPrix) return null
+    const idsGroupe = ingredients.filter(i => (i.ingredient_base || i.nom) === groupeSelectionne).map(i => i.id)
+    let total = 0
+    recetteIngredients.forEach(ri => {
+      if (!idsGroupe.includes(ri.ingredient_id)) return
+      const ing = ingredients.find(i => i.id === ri.ingredient_id)
+      if (!ing || !ri.grammage) return
+      const facteur = (ing.unite === 'g' || ing.unite === 'ml') ? ri.grammage / 1000 : parseFloat(ri.grammage)
+      total += facteur * (parseFloat(ing.prix_unitaire) - statsGroupe.meilleurPrix)
+    })
+    return total > 0.01 ? total : null
+  }, [ingredients, recetteIngredients, groupeSelectionne, statsGroupe])
+
+  const statsFournisseur = useMemo(() => {
+    if (!fournisseurSelectionne) return null
+    const total = produitsDuFournisseur.reduce((acc, { ing }) => acc + (parseFloat(ing.prix_achat) || 0), 0)
+    return { nbProduits: produitsDuFournisseur.length, totalDernieresCommandes: total }
+  }, [fournisseurSelectionne, produitsDuFournisseur])
+
+  function exporterFiche() {
+    let texte = ''
+    if (analyseMode === 'produit' && groupeSelectionne && statsGroupe) {
+      texte = `${groupeSelectionne}\n\nFournisseurs: ${statsGroupe.nbFournisseurs}\nMeilleur prix: ${statsGroupe.meilleurPrix?.toFixed(2)}$/${statsGroupe.unite}\nPrix moyen: ${statsGroupe.prixMoyen?.toFixed(2)}$/${statsGroupe.unite}\n\nClassement:\n` + statsGroupe.classement.map(i => `- ${i.fournisseur||'?'}: ${parseFloat(i.prix_unitaire).toFixed(2)}$/${i.unite}`).join('\n')
+    } else if (analyseMode === 'fournisseur' && fournisseurSelectionne && statsFournisseur) {
+      texte = `${fournisseurSelectionne}\n\nProduits: ${statsFournisseur.nbProduits}\n\n` + produitsDuFournisseur.map(({ing}) => `- ${ing.nom}: ${parseFloat(ing.prix_unitaire).toFixed(2)}$/${ing.unite}`).join('\n')
+    } else return
+    const a = document.createElement('a')
+    a.href = 'data:text/plain;charset=utf-8,' + encodeURIComponent(texte)
+    a.download = (groupeSelectionne || fournisseurSelectionne) + '.txt'
+    a.click()
+  }
+
+  const comparaisonFiltree = useMemo(() => comparaisonData.filter(r =>
+    (!searchComparatif || r.nom.toLowerCase().includes(searchComparatif.toLowerCase())) &&
+    (!categorieComparatif || r.categorie === categorieComparatif)
+  ), [comparaisonData, searchComparatif, categorieComparatif])
 
   function toggleSort(f) { setSort(s => ({ field:f, dir: s.field===f && s.dir==='asc' ? 'desc' : 'asc' })) }
   function sortIcon(f) { return sort.field!==f ? '↕' : sort.dir==='asc' ? '↑' : '↓' }
@@ -102,12 +241,16 @@ export default function Ingredients() {
 
   async function saveDrawer() {
     const d = { ...drawerIng }
-    if (d.prix_achat && d.qte_achetee) d.prix_unitaire = parseFloat(d.prix_achat) / parseFloat(d.qte_achetee)
+    d.qte_achetee = parseFloat(d.qte_achetee) || null
+    d.prix_achat = parseFloat(d.prix_achat) || null
+    if (d.prix_achat && d.qte_achetee) d.prix_unitaire = d.prix_achat / d.qte_achetee
     const ancien = ingredients.find(i => i.id === d.id)
     if (ancien && parseFloat(ancien.prix_unitaire) !== parseFloat(d.prix_unitaire)) {
-      await supabase.from('ingredients_prix_historique').insert({ ingredient_id: d.id, prix: ancien.prix_unitaire })
+      const { error: errHist } = await supabase.from('ingredients_prix_historique').insert({ ingredient_id: d.id, prix: d.prix_unitaire, fournisseur: d.fournisseur, prix_achat: d.prix_achat, qte_achetee: d.qte_achetee, format_achat: d.format_achat || null, unite: d.unite })
+      if (errHist) return setToast('Erreur historique: ' + errHist.message)
     }
-    await supabase.from('ingredients').update(d).eq('id', d.id)
+    const { error } = await supabase.from('ingredients').update(d).eq('id', d.id)
+    if (error) return setToast('Erreur sauvegarde: ' + error.message)
     await reload()
     setDrawerIng(null)
     setToast('✓ Sauvegardé')
@@ -154,8 +297,10 @@ export default function Ingredients() {
   async function appliquerLignes(lignes) {
     for (const { row: r, existant } of lignes) {
       const champs = champsDe(r)
+      let id = existant?.id
       if (existant) await supabase.from('ingredients').update(champs).eq('id', existant.id)
-      else await supabase.from('ingredients').insert({ ...champs, nom: String(r.nom), organization_id: orgId, archived: false })
+      else { const { data } = await supabase.from('ingredients').insert({ ...champs, nom: String(r.nom), organization_id: orgId, archived: false }).select().single(); id = data?.id }
+      if (id) await supabase.from('ingredients_prix_historique').insert({ ingredient_id: id, prix: champs.prix_unitaire, fournisseur: champs.fournisseur, prix_achat: champs.prix_achat, qte_achetee: champs.qte_achetee, format_achat: champs.format_achat, unite: champs.unite })
     }
   }
 
@@ -178,12 +323,15 @@ export default function Ingredients() {
     for (let i = 0; i < conflits.length; i++) {
       const { row: r, existant } = conflits[i]
       const champs = champsDe(r)
+      let id
       if (choix[i] === 'remplacer') {
-        await supabase.from('ingredients_prix_historique').insert({ ingredient_id: existant.id, prix: existant.prix_unitaire })
-        await supabase.from('ingredients').update(champs).eq('id', existant.id)
+        id = existant.id
+        await supabase.from('ingredients').update(champs).eq('id', id)
       } else {
-        await supabase.from('ingredients').insert({ ...champs, nom: String(r.nom), organization_id: orgId, archived: false })
+        const { data } = await supabase.from('ingredients').insert({ ...champs, nom: String(r.nom), organization_id: orgId, archived: false }).select().single()
+        id = data?.id
       }
+      if (id) await supabase.from('ingredients_prix_historique').insert({ ingredient_id: id, prix: champs.prix_unitaire, fournisseur: champs.fournisseur, prix_achat: champs.prix_achat, qte_achetee: champs.qte_achetee, format_achat: champs.format_achat, unite: champs.unite })
     }
     setConflitsImport(null)
     await reload()
@@ -390,50 +538,161 @@ export default function Ingredients() {
 
         {onglet === 'fournisseurs' && (
           <div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'20px', marginBottom:'24px' }}>
-              {/* Résumé par fournisseur */}
-              <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'20px' }}>
-                <p style={{ color:'var(--muted)', fontSize:'12px', marginBottom:'16px', textTransform:'uppercase', letterSpacing:'1px' }}>Résumé par fournisseur</p>
-                {fournisseurs.map(f => {
-                  const ings = ingredients.filter(i => i && i.fournisseur === f)
-                  const prixMoyen = ings.reduce((acc, i) => acc + parseFloat(i.prix_unitaire), 0) / ings.length
-                  return (
-                    <div key={f} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 0', borderBottom:'1px solid var(--border)' }}>
-                      <div>
-                        <div style={{ fontWeight:'600', fontSize:'14px' }}>{f}</div>
-                        <div style={{ color:'var(--muted)', fontSize:'12px' }}>{ings.length} produit{ings.length>1?'s':''}</div>
-                      </div>
-                      <span style={{ color:'#00E5A0', fontSize:'14px', fontWeight:'600' }}>{prixMoyen.toFixed(2)}$ moy.</span>
-                    </div>
-                  )
-                })}
-                {fournisseurs.length === 0 && <p style={{ color:'var(--muted)', fontSize:'13px' }}>Aucun fournisseur enregistré</p>}
+            <div style={{ display:'grid', gridTemplateColumns:'260px 1fr', gap:'20px', marginBottom:'24px' }}>
+              {/* Liste cherchable */}
+              <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'16px' }}>
+                <div style={{ display:'flex', gap:'6px', marginBottom:'12px' }}>
+                  <button onClick={() => setAnalyseMode('produit')} style={{ flex:1, padding:'6px', borderRadius:'6px', border:'1px solid '+(analyseMode==='produit'?'#00C2FF':'var(--border)'), background: analyseMode==='produit'?'rgba(0,194,255,0.1)':'transparent', color: analyseMode==='produit'?'#00C2FF':'var(--muted)', cursor:'pointer', fontSize:'12px' }}>Par produit</button>
+                  <button onClick={() => setAnalyseMode('fournisseur')} style={{ flex:1, padding:'6px', borderRadius:'6px', border:'1px solid '+(analyseMode==='fournisseur'?'#00C2FF':'var(--border)'), background: analyseMode==='fournisseur'?'rgba(0,194,255,0.1)':'transparent', color: analyseMode==='fournisseur'?'#00C2FF':'var(--muted)', cursor:'pointer', fontSize:'12px' }}>Fournisseur</button>
+                </div>
+                <input placeholder={analyseMode==='produit' ? 'Rechercher un produit' : 'Rechercher un fournisseur'} value={searchFiche} onChange={e => setSearchFiche(e.target.value)} style={{ ...inp, marginBottom:'8px' }} />
+                {analyseMode === 'produit' && (
+                  <select value={categorieFiche} onChange={e => setCategorieFiche(e.target.value)} style={{ ...inp, marginBottom:'10px' }}>
+                    <option value=''>Toutes catégories</option>
+                    {CATEGORIES.map(c => <option key={c}>{c}</option>)}
+                  </select>
+                )}
+                <style>{`.pilote-scroll::-webkit-scrollbar{width:6px}.pilote-scroll::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}.pilote-scroll::-webkit-scrollbar-track{background:transparent}`}</style>
+                <div className="pilote-scroll" style={{ maxHeight:'340px', overflowY:'auto' }}>
+                  {analyseMode === 'produit' ? produitsListe.map(g => (
+                    <div key={g.nom} onClick={() => setGroupeSelectionne(g.nom)} style={{ padding:'8px 10px', borderRadius:'6px', fontSize:'13px', cursor:'pointer', background: groupeSelectionne===g.nom ? 'rgba(0,194,255,0.12)' : 'transparent', color: groupeSelectionne===g.nom ? '#00C2FF' : 'inherit' }}>{g.nom}</div>
+                  )) : fournisseursListe.map(f => (
+                    <div key={f} onClick={() => setFournisseurSelectionne(f)} style={{ padding:'8px 10px', borderRadius:'6px', fontSize:'13px', cursor:'pointer', background: fournisseurSelectionne===f ? 'rgba(0,194,255,0.12)' : 'transparent', color: fournisseurSelectionne===f ? '#00C2FF' : 'inherit' }}>{f}</div>
+                  ))}
+                  {analyseMode==='produit' && produitsListe.length===0 && <p style={{ color:'var(--muted)', fontSize:'12px' }}>Aucun résultat</p>}
+                  {analyseMode==='fournisseur' && fournisseursListe.length===0 && <p style={{ color:'var(--muted)', fontSize:'12px' }}>Aucun résultat</p>}
+                </div>
               </div>
 
-              {/* Historique prix */}
+              {/* Fiche */}
               <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'20px' }}>
-                <p style={{ color:'var(--muted)', fontSize:'12px', marginBottom:'12px', textTransform:'uppercase', letterSpacing:'1px' }}>Historique des prix</p>
-                <select value={ingFournisseur} onChange={e => setIngFournisseur(e.target.value)} style={{ ...inp, marginBottom:'16px' }}>
-                  <option value=''>Choisir un ingrédient...</option>
-                  {[...new Set(ingredients.map(i => i?.nom).filter(Boolean))].sort().map(n => <option key={n}>{n}</option>)}
-                </select>
-                {historiqueFiltre.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={160}>
-                    <LineChart data={historiqueFiltre}>
-                      <XAxis dataKey="date" tick={{ fontSize:10, fill:'#8B9BB4' }} />
-                      <YAxis tick={{ fontSize:10, fill:'#8B9BB4' }} />
-                      <Tooltip contentStyle={{ background:'#1a1f2e', border:'1px solid rgba(0,194,255,0.2)', borderRadius:'8px', fontSize:'12px' }} />
-                      <Line type="monotone" dataKey="prix" stroke="#00C2FF" strokeWidth={2} dot={{ fill:'#00C2FF', r:4 }} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                ) : <p style={{ color:'var(--muted)', fontSize:'13px', textAlign:'center', marginTop:'20px' }}>{ingFournisseur ? 'Aucun historique pour cet ingrédient' : 'Sélectionne un ingrédient'}</p>}
+                {analyseMode === 'produit' && (
+                  groupeSelectionne && statsGroupe ? (
+                    <>
+                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' }}>
+                        <span style={{ fontWeight:'700', fontSize:'18px' }}>{groupeSelectionne}</span>
+                        <button onClick={exporterFiche} style={{ padding:'6px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:'transparent', color:'var(--muted)', cursor:'pointer', fontSize:'12px' }}>⬇ Exporter</button>
+                      </div>
+                      <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'10px', marginBottom:'16px' }}>
+                        <div style={{ background:'rgba(255,255,255,0.03)', borderRadius:'8px', padding:'10px' }}>
+                          <div style={{ fontSize:'11px', color:'var(--muted)' }}>Fournisseurs</div>
+                          <div style={{ fontSize:'18px', fontWeight:'700' }}>{statsGroupe.nbFournisseurs}</div>
+                        </div>
+                        <div style={{ background:'rgba(255,255,255,0.03)', borderRadius:'8px', padding:'10px' }}>
+                          <div style={{ fontSize:'11px', color:'var(--muted)' }}>Meilleur prix</div>
+                          <div style={{ fontSize:'18px', fontWeight:'700', color:'#00E5A0' }}>{statsGroupe.meilleurPrix?.toFixed(2)}$</div>
+                        </div>
+                        <div style={{ background:'rgba(255,255,255,0.03)', borderRadius:'8px', padding:'10px' }}>
+                          <div style={{ fontSize:'11px', color:'var(--muted)' }}>Dernier achat</div>
+                          <div style={{ fontSize:'14px', fontWeight:'700' }}>{statsGroupe.dernierAchat ? new Date(statsGroupe.dernierAchat).toLocaleDateString('fr-CA') : '—'}</div>
+                        </div>
+                      </div>
+                      {comparaisonGroupeData.chart.length > 0 && (
+                        <ResponsiveContainer width="100%" height={150}>
+                          <LineChart data={comparaisonGroupeData.chart}>
+                            <XAxis dataKey="date" tick={{ fontSize:10, fill:'#8B9BB4' }} />
+                            <YAxis tick={{ fontSize:10, fill:'#8B9BB4' }} />
+                            <Tooltip contentStyle={{ background:'#1a1f2e', border:'1px solid rgba(0,194,255,0.2)', borderRadius:'8px', fontSize:'12px' }} />
+                            <Legend wrapperStyle={{ fontSize:'11px' }} />
+                            {comparaisonGroupeData.fournisseursGroupe.map((f,i) => <Line key={f} type="monotone" dataKey={f} stroke={FOURNISSEUR_COLORS[i % FOURNISSEUR_COLORS.length]} strokeWidth={2} dot={{ r:3 }} connectNulls />)}
+                          </LineChart>
+                        </ResponsiveContainer>
+                      )}
+                      {comparaisonGroupeData.forecast && (
+                        <p style={{ fontSize:'12px', color:'var(--muted)', marginTop:'8px' }}>
+                          Tendance : <span style={{ color: comparaisonGroupeData.forecast.tauxAnnuel >= 0 ? '#FF4D6D' : '#00E5A0', fontWeight:'700' }}>{comparaisonGroupeData.forecast.tauxAnnuel >= 0 ? '+' : ''}{(comparaisonGroupeData.forecast.tauxAnnuel*100).toFixed(1)}%/an</span> → {comparaisonGroupeData.forecast.prixEstime.toFixed(2)}$ dans 1 an
+                        </p>
+                      )}
+                      {indiceExterne && (
+                        <div style={{ display:'flex', alignItems:'center', gap:'8px', marginTop:'10px', padding:'10px 12px', background:'rgba(0,194,255,0.08)', border:'1px solid rgba(0,194,255,0.3)', borderRadius:'8px' }}>
+                          <span style={{ fontSize:'13px', fontWeight:'700', color:'#00C2FF' }}>📊 Indice StatCan</span>
+                          <span style={{ fontSize:'13px', color:'var(--muted)' }}>({indiceExterne.categorie}, Québec)</span>
+                          <span style={{ fontSize:'14px', fontWeight:'700', color: indiceExterne.variation12mois>=0 ? '#FF4D6D' : '#00E5A0', marginLeft:'auto' }}>{indiceExterne.variation12mois>=0?'+':''}{indiceExterne.variation12mois}% / 12 mois</span>
+                        </div>
+                      )}
+                      {economiePotentielle && <p style={{ fontSize:'12px', color:'#F5A623', marginTop:'8px' }}>💡 Économie potentielle sur tes recettes actuelles : {economiePotentielle.toFixed(2)}$ (si toujours acheté au meilleur prix)</p>}
+                      <p style={{ fontSize:'11px', color:'var(--muted)', marginTop:'12px', marginBottom:'6px', textTransform:'uppercase' }}>Classement</p>
+                      {statsGroupe.classement.map((ing,i) => (
+                        <div key={ing.id}>
+                          <div onClick={() => setDetailIngredientId(detailIngredientId === ing.id ? null : ing.id)} style={{ display:'flex', justifyContent:'space-between', padding:'5px 0', borderBottom: detailIngredientId===ing.id ? 'none' : '1px solid var(--border)', fontSize:'13px', cursor:'pointer' }}>
+                            <span>{i===0 && '🏆 '}{ing.fournisseur||'Sans fournisseur'}</span>
+                            <span style={{ color: i===0 ? '#00E5A0' : 'var(--muted)' }}>{parseFloat(ing.prix_unitaire).toFixed(2)}$/{ing.unite}</span>
+                          </div>
+                          {detailIngredientId === ing.id && (
+                            <div style={{ padding:'10px', marginBottom:'8px', background:'rgba(255,255,255,0.03)', borderRadius:'8px', borderBottom:'1px solid var(--border)' }}>
+                              <p style={{ fontSize:'11px', color:'var(--muted)', marginBottom:'8px', textTransform:'uppercase' }}>Historique des commandes</p>
+                              {detailHistorique.length > 0 ? (
+                                <>
+                                  <ResponsiveContainer width="100%" height={100}>
+                                    <LineChart data={detailHistorique.map(h => ({ date: new Date(h.created_at).toLocaleDateString('fr-CA'), prix: parseFloat(h.prix) }))}>
+                                      <XAxis dataKey="date" tick={{ fontSize:9, fill:'#8B9BB4' }} />
+                                      <YAxis tick={{ fontSize:9, fill:'#8B9BB4' }} />
+                                      <Tooltip contentStyle={{ background:'#1a1f2e', border:'1px solid rgba(0,194,255,0.2)', borderRadius:'8px', fontSize:'11px' }} />
+                                      <Line type="monotone" dataKey="prix" stroke="#00C2FF" strokeWidth={2} dot={{ r:3 }} />
+                                    </LineChart>
+                                  </ResponsiveContainer>
+                                  {detailHistorique.slice().reverse().map((h,j) => (
+                                    <div key={j} style={{ display:'flex', justifyContent:'space-between', fontSize:'12px', padding:'4px 0', borderBottom:'1px solid var(--border)' }}>
+                                      <span>{new Date(h.created_at).toLocaleDateString('fr-CA')}{h.format_achat ? ' · '+h.format_achat : ''}</span>
+                                      <span>{parseFloat(h.prix).toFixed(2)}$</span>
+                                    </div>
+                                  ))}
+                                </>
+                              ) : <p style={{ fontSize:'12px', color:'var(--muted)' }}>Aucun historique de commande enregistré pour cet ingrédient</p>}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </>
+                  ) : <p style={{ color:'var(--muted)', fontSize:'13px', textAlign:'center', marginTop:'40px' }}>Sélectionne un produit à gauche</p>
+                )}
+
+                {analyseMode === 'fournisseur' && (
+                  fournisseurSelectionne && statsFournisseur ? (
+                    <>
+                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' }}>
+                        <span style={{ fontWeight:'700', fontSize:'18px' }}>{fournisseurSelectionne}</span>
+                        <button onClick={exporterFiche} style={{ padding:'6px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:'transparent', color:'var(--muted)', cursor:'pointer', fontSize:'12px' }}>⬇ Exporter</button>
+                      </div>
+                      <div style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:'10px', marginBottom:'16px' }}>
+                        <div style={{ background:'rgba(255,255,255,0.03)', borderRadius:'8px', padding:'10px' }}>
+                          <div style={{ fontSize:'11px', color:'var(--muted)' }}>Produits</div>
+                          <div style={{ fontSize:'18px', fontWeight:'700' }}>{statsFournisseur.nbProduits}</div>
+                        </div>
+                        <div style={{ background:'rgba(255,255,255,0.03)', borderRadius:'8px', padding:'10px' }}>
+                          <div style={{ fontSize:'11px', color:'var(--muted)' }}>Dernières commandes (total)</div>
+                          <div style={{ fontSize:'18px', fontWeight:'700' }}>{statsFournisseur.totalDernieresCommandes.toFixed(2)}$</div>
+                        </div>
+                      </div>
+                      <div className="pilote-scroll" style={{ maxHeight:'260px', overflowY:'auto' }}>
+                        {produitsDuFournisseur.map(({ ing, forecast, alternative }) => (
+                          <div key={ing.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 0', borderBottom:'1px solid var(--border)' }}>
+                            <span style={{ fontSize:'13px' }}>{ing.nom}</span>
+                            <span style={{ fontSize:'12px', color:'var(--muted)', textAlign:'right' }}>
+                              {parseFloat(ing.prix_unitaire).toFixed(2)}$/{ing.unite}
+                              {forecast && <><br/><span style={{ color: forecast.tauxAnnuel >= 0 ? '#FF4D6D' : '#00E5A0' }}>{forecast.tauxAnnuel >= 0 ? '+' : ''}{(forecast.tauxAnnuel*100).toFixed(1)}%/an</span></>}
+                              {alternative && <><br/><span style={{ color:'#F5A623' }}>⚠️ {alternative.fournisseur} : {parseFloat(alternative.prix_unitaire).toFixed(2)}$</span></>}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : <p style={{ color:'var(--muted)', fontSize:'13px', textAlign:'center', marginTop:'40px' }}>Sélectionne un fournisseur à gauche</p>
+                )}
               </div>
             </div>
 
             {/* Tableau comparatif */}
-            {comparaisonData.length > 0 && (
-              <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'20px', marginBottom:'24px' }}>
-                <p style={{ color:'var(--muted)', fontSize:'12px', marginBottom:'16px', textTransform:'uppercase', letterSpacing:'1px' }}>Comparaison prix par fournisseur</p>
+            <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'20px', marginBottom:'24px' }}>
+              <p style={{ color:'var(--muted)', fontSize:'12px', marginBottom:'12px', textTransform:'uppercase', letterSpacing:'1px' }}>Comparaison prix par fournisseur</p>
+              <div style={{ display:'flex', gap:'10px', marginBottom:'16px' }}>
+                <input placeholder="Rechercher un ingrédient" value={searchComparatif} onChange={e => setSearchComparatif(e.target.value)} style={{ ...inp, flex:1 }} />
+                <select value={categorieComparatif} onChange={e => setCategorieComparatif(e.target.value)} style={{ ...inp, width:'180px' }}>
+                  <option value=''>Toutes catégories</option>
+                  {CATEGORIES.map(c => <option key={c}>{c}</option>)}
+                </select>
+              </div>
+              {comparaisonFiltree.length > 0 ? (
                 <div style={{ overflowX:'auto' }}>
                   <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'13px' }}>
                     <thead>
@@ -444,7 +703,7 @@ export default function Ingredients() {
                       </tr>
                     </thead>
                     <tbody>
-                      {comparaisonData.map((row, i) => {
+                      {comparaisonFiltree.map((row, i) => {
                         const prix = fournisseurs.map(f => row[f]).filter(Boolean)
                         const min = Math.min(...prix)
                         return (
@@ -462,15 +721,15 @@ export default function Ingredients() {
                     </tbody>
                   </table>
                 </div>
-              </div>
-            )}
+              ) : <p style={{ color:'var(--muted)', fontSize:'13px', textAlign:'center', padding:'24px' }}>{comparaisonData.length===0 ? 'Aucune comparaison disponible — ajoutez le même ingrédient chez plusieurs fournisseurs' : 'Aucun résultat pour ces filtres'}</p>}
+            </div>
 
             {/* Graphique barres */}
-            {comparaisonData.length > 0 && fournisseurs.length > 1 && (
+            {comparaisonFiltree.length > 0 && fournisseurs.length > 1 && (
               <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'20px' }}>
                 <p style={{ color:'var(--muted)', fontSize:'12px', marginBottom:'16px', textTransform:'uppercase', letterSpacing:'1px' }}>Graphique comparatif</p>
                 <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={comparaisonData.slice(0,10)}>
+                  <BarChart data={comparaisonFiltree.slice(0,10)}>
                     <XAxis dataKey="nom" tick={{ fontSize:10, fill:'#8B9BB4' }} />
                     <YAxis tick={{ fontSize:10, fill:'#8B9BB4' }} />
                     <Tooltip contentStyle={{ background:'#1a1f2e', border:'1px solid rgba(0,194,255,0.2)', borderRadius:'8px', fontSize:'12px' }} />
@@ -478,12 +737,6 @@ export default function Ingredients() {
                     {fournisseurs.map((f, i) => <Bar key={f} dataKey={f} fill={FOURNISSEUR_COLORS[i % FOURNISSEUR_COLORS.length]} radius={[4,4,0,0]} />)}
                   </BarChart>
                 </ResponsiveContainer>
-              </div>
-            )}
-
-            {comparaisonData.length === 0 && (
-              <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'48px', textAlign:'center' }}>
-                <p style={{ color:'var(--muted)', fontSize:'14px' }}>Aucune comparaison disponible — ajoutez le même ingrédient chez plusieurs fournisseurs pour voir la comparaison</p>
               </div>
             )}
           </div>

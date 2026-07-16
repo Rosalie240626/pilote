@@ -1,3 +1,4 @@
+cat > app/dashboard/ingredients/import/page.js << 'EOF'
 'use client'
 import { useState, useEffect } from 'react'
 import { createClient } from '../../../../lib/supabase'
@@ -87,8 +88,10 @@ export default function ImportFacture() {
   async function appliquerLignes(lignes) {
     for (const { it, existant } of lignes) {
       const champs = champsDe(it)
+      let id = existant?.id
       if (existant) await supabase.from('ingredients').update(champs).eq('id', existant.id)
-      else await supabase.from('ingredients').insert({ ...champs, organization_id: orgId, archived: false })
+      else { const { data } = await supabase.from('ingredients').insert({ ...champs, organization_id: orgId, archived: false }).select().single(); id = data?.id }
+      if (id) await supabase.from('ingredients_prix_historique').insert({ ingredient_id: id, prix: champs.prix_unitaire, fournisseur: champs.fournisseur, prix_achat: champs.prix_achat, qte_achetee: champs.qte_achetee, format_achat: champs.format_achat, unite: champs.unite })
     }
   }
 
@@ -114,12 +117,15 @@ export default function ImportFacture() {
     for (let i = 0; i < conflits.length; i++) {
       const { it, existant } = conflits[i]
       const champs = champsDe(it)
+      let id
       if (choix[i] === 'remplacer') {
-        await supabase.from('ingredients_prix_historique').insert({ ingredient_id: existant.id, prix: existant.prix_unitaire })
-        await supabase.from('ingredients').update(champs).eq('id', existant.id)
+        id = existant.id
+        await supabase.from('ingredients').update(champs).eq('id', id)
       } else {
-        await supabase.from('ingredients').insert({ ...champs, organization_id: orgId, archived: false })
+        const { data } = await supabase.from('ingredients').insert({ ...champs, organization_id: orgId, archived: false }).select().single()
+        id = data?.id
       }
+      if (id) await supabase.from('ingredients_prix_historique').insert({ ingredient_id: id, prix: champs.prix_unitaire, fournisseur: champs.fournisseur, prix_achat: champs.prix_achat, qte_achetee: champs.qte_achetee, format_achat: champs.format_achat, unite: champs.unite })
     }
     router.push('/dashboard/ingredients')
   }
@@ -190,3 +196,5 @@ export default function ImportFacture() {
     </div>
   )
 }
+EOF
+echo "✅ import/page.js remplacé"
