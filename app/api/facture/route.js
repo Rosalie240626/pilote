@@ -1,4 +1,3 @@
-cat > app/api/facture/route.js << 'EOF'
 import Anthropic from '@anthropic-ai/sdk'
 import { getSupabase, checkRateLimit } from '../../../lib/supabase-server'
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
@@ -45,5 +44,3 @@ Réponds UNIQUEMENT en JSON:
     return Response.json({ error: e.message, ingredients: [] }, { status: 500 })
   }
 }
-EOF
-echo "✅ route.js remplacé"

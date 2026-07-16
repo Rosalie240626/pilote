@@ -103,6 +103,10 @@ export default function Ingredients() {
   async function saveDrawer() {
     const d = { ...drawerIng }
     if (d.prix_achat && d.qte_achetee) d.prix_unitaire = parseFloat(d.prix_achat) / parseFloat(d.qte_achetee)
+    const ancien = ingredients.find(i => i.id === d.id)
+    if (ancien && parseFloat(ancien.prix_unitaire) !== parseFloat(d.prix_unitaire)) {
+      await supabase.from('ingredients_prix_historique').insert({ ingredient_id: d.id, prix: ancien.prix_unitaire })
+    }
     await supabase.from('ingredients').update(d).eq('id', d.id)
     await reload()
     setDrawerIng(null)
@@ -116,6 +120,15 @@ export default function Ingredients() {
     setToast('Supprimé')
   }
 
+  async function regrouperSelection() {
+    const nom = window.prompt(`Nom du groupe pour les ${selected.length} ingrédients sélectionnés :`, '')
+    if (!nom) return
+    await supabase.from('ingredients').update({ ingredient_base: nom }).in('id', selected)
+    await reload()
+    setSelected([])
+    setToast(`✓ ${selected.length} ingrédients regroupés sous "${nom}"`)
+  }
+
   async function dupliquer(ing) {
     const { id, created_at, ...rest } = ing
     const { data } = await supabase.from('ingredients').insert({...rest, nom: ing.nom+' (copie)'}).select().single()
@@ -123,32 +136,68 @@ export default function Ingredients() {
     setToast('Dupliqué')
   }
 
-  async function importExcel(e) {
-    const file = e.target.files[0]
-    if (!file) return
-    const buf = await file.arrayBuffer()
-    const wb = XLSX.read(buf, { type: 'array' })
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]])
-    const toInsert = rows.filter(r => r.nom).map(r => ({
-      organization_id: orgId,
-      nom: String(r.nom),
+  function champsDe(r) {
+    return {
       marque: r.marque ? String(r.marque) : null,
       code_produit: r.code_produit ? String(r.code_produit) : null,
       categorie: r.categorie || null,
       fournisseur: r.fournisseur || null,
       unite: r.unite || 'unité',
+      format_achat: r.format_achat ? String(r.format_achat) : null,
       prix_unitaire: parseFloat(r.prix_unitaire) || 0,
       prix_achat: parseFloat(r.prix_achat) || null,
       qte_achetee: parseFloat(r.qte_achetee) || null,
       notes: r.notes ? String(r.notes) : null,
-      archived: false,
-    }))
-    e.target.value = ''
-    if (!toInsert.length) return setToast('Aucune ligne valide trouvée')
-    const { data, error } = await supabase.from('ingredients').insert(toInsert).select()
-    if (error) return setToast('Erreur import: ' + error.message)
+    }
+  }
+
+  async function appliquerLignes(lignes) {
+    for (const { row: r, existant } of lignes) {
+      const champs = champsDe(r)
+      if (existant) await supabase.from('ingredients').update(champs).eq('id', existant.id)
+      else await supabase.from('ingredients').insert({ ...champs, nom: String(r.nom), organization_id: orgId, archived: false })
+    }
+  }
+
+  async function traiterImport(rows) {
+    const conflits = [], aTraiter = []
+    for (const r of rows) {
+      const nomNorm = String(r.nom).toLowerCase().trim()
+      const existant = ingredients.find(i => i.nom.toLowerCase().trim() === nomNorm && (i.fournisseur||'') === (r.fournisseur||''))
+      const nouveauPrix = parseFloat(r.prix_unitaire) || 0
+      if (existant && parseFloat(existant.prix_unitaire) !== nouveauPrix) conflits.push({ row: r, existant })
+      else aTraiter.push({ row: r, existant })
+    }
+    await appliquerLignes(aTraiter)
+    if (conflits.length > 0) setConflitsImport({ conflits, choix: conflits.map(() => 'remplacer') })
+    else { await reload(); setToast('✓ Import terminé') }
+  }
+
+  async function confirmerConflits() {
+    const { conflits, choix } = conflitsImport
+    for (let i = 0; i < conflits.length; i++) {
+      const { row: r, existant } = conflits[i]
+      const champs = champsDe(r)
+      if (choix[i] === 'remplacer') {
+        await supabase.from('ingredients_prix_historique').insert({ ingredient_id: existant.id, prix: existant.prix_unitaire })
+        await supabase.from('ingredients').update(champs).eq('id', existant.id)
+      } else {
+        await supabase.from('ingredients').insert({ ...champs, nom: String(r.nom), organization_id: orgId, archived: false })
+      }
+    }
+    setConflitsImport(null)
     await reload()
-    setToast(`✓ ${data.length} ingrédients importés`)
+    setToast('✓ Import terminé')
+  }
+
+  async function importExcel(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    const buf = await file.arrayBuffer()
+    const wb = XLSX.read(buf, { type: 'array' })
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]).filter(r => r.nom)
+    e.target.value = ''
+    await traiterImport(rows)
   }
 
   async function exportCSV() {
@@ -165,6 +214,52 @@ export default function Ingredients() {
     if (ing.unite === 'kg') return (p/10).toFixed(3)+'$/100g'
     if (ing.unite === 'L') return (p/10).toFixed(3)+'$/100ml'
     return '—'
+  }
+
+  const [doublonsIgnores, setDoublonsIgnores] = useState([])
+
+  useEffect(() => {
+    try { setDoublonsIgnores(JSON.parse(localStorage.getItem('doublons_ignores') || '[]')) } catch { setDoublonsIgnores([]) }
+  }, [])
+
+  const doublonsDetectes = useMemo(() => {
+    const groups = {}
+    ingredients.forEach(i => {
+      if (!i) return
+      const key = i.nom.toLowerCase().trim().replace(/\s+/g, ' ')
+      if (!groups[key]) groups[key] = []
+      groups[key].push(i)
+    })
+    return Object.values(groups).filter(g => g.length > 1 && !doublonsIgnores.includes(g[0].nom.toLowerCase().trim()))
+  }, [ingredients, doublonsIgnores])
+
+  const [fusionChoix, setFusionChoix] = useState({})
+  const [fusionInclus, setFusionInclus] = useState({})
+  const [showImportMenu, setShowImportMenu] = useState(false)
+  const [conflitsImport, setConflitsImport] = useState(null)
+
+  function garderSepares(key) {
+    const next = [...doublonsIgnores, key]
+    setDoublonsIgnores(next)
+    localStorage.setItem('doublons_ignores', JSON.stringify(next))
+    setToast('✓ Ces ingrédients ne seront plus signalés comme doublons')
+  }
+
+  async function fusionner(group) {
+    const key = group[0].nom.toLowerCase().trim()
+    const inclus = fusionInclus[key] || group.map(g => g.id)
+    const items = group.filter(g => inclus.includes(g.id))
+    if (items.length < 2) return setToast('Sélectionne au moins 2 ingrédients à fusionner')
+    const keepId = inclus.includes(fusionChoix[key]) ? fusionChoix[key] : items[0].id
+    const keep = items.find(g => g.id === keepId)
+    const autres = items.filter(g => g.id !== keepId)
+    if (!window.confirm(`Fusionner en gardant "${keep.nom}" (${keep.fournisseur || 'sans fournisseur'}) ? Les ${autres.length} autre(s) seront supprimé(s) et leurs recettes réattribuées.`)) return
+    for (const o of autres) {
+      await supabase.from('recette_ingredients').update({ ingredient_id: keep.id }).eq('ingredient_id', o.id)
+      await supabase.from('ingredients').delete().eq('id', o.id)
+    }
+    await reload()
+    setToast('✓ Fusionné')
   }
 
   const inp = { width:'100%', padding:'7px 10px', borderRadius:'6px', border:'1px solid var(--border)', background:'transparent', color:'inherit', fontSize:'13px', boxSizing:'border-box' }
@@ -198,17 +293,24 @@ export default function Ingredients() {
           </div>
           <div style={{ display:'flex', gap:'8px' }}>
             <button onClick={exportCSV} style={{ padding:'8px 14px', borderRadius:'8px', background:'transparent', border:'1px solid var(--border)', color:'inherit', cursor:'pointer', fontSize:'13px' }}>⬇ Export</button>
-            <button onClick={() => router.push('/dashboard/ingredients/import')} style={{ padding:'8px 14px', borderRadius:'8px', background:'transparent', border:'1px solid var(--border)', color:'inherit', cursor:'pointer', fontSize:'13px' }}>📸 Importer</button>
-            <input id="excel-input" type="file" accept=".xlsx,.xls" onChange={importExcel} style={{ display:'none' }} />
-            <button onClick={() => document.getElementById('excel-input').click()} style={{ padding:'8px 14px', borderRadius:'8px', background:'transparent', border:'1px solid var(--border)', color:'inherit', cursor:'pointer', fontSize:'13px' }}>📊 Importer Excel</button>
             <button onClick={() => setEditMode(!editMode)} style={{ padding:'8px 14px', borderRadius:'8px', background: editMode?'rgba(0,194,255,0.1)':'transparent', border:'1px solid '+(editMode?'#00C2FF':'var(--border)'), color: editMode?'#00C2FF':'inherit', cursor:'pointer', fontSize:'13px' }}>✏️ Modifier</button>
-            <button onClick={() => router.push('/dashboard/ingredients/nouveau')} style={{ padding:'8px 16px', borderRadius:'8px', background:'#00C2FF', color:'#0A0F1E', fontWeight:'700', border:'none', cursor:'pointer', fontSize:'13px' }}>+ Ajouter</button>
+            <div style={{ position:'relative' }}>
+              <button onClick={() => setShowImportMenu(!showImportMenu)} style={{ padding:'8px 16px', borderRadius:'8px', background:'#00C2FF', color:'#0A0F1E', fontWeight:'700', border:'none', cursor:'pointer', fontSize:'13px' }}>+ Ajouter</button>
+              {showImportMenu && (
+                <div style={{ position:'absolute', top:'110%', right:0, background:'var(--card)', border:'1px solid var(--border)', borderRadius:'8px', overflow:'hidden', zIndex:50, minWidth:'180px', boxShadow:'0 4px 16px rgba(0,0,0,0.3)' }}>
+                  <button onClick={() => { setShowImportMenu(false); router.push('/dashboard/ingredients/nouveau') }} style={{ display:'block', width:'100%', textAlign:'left', padding:'10px 14px', background:'transparent', border:'none', color:'inherit', cursor:'pointer', fontSize:'13px' }} onMouseEnter={e=>e.currentTarget.style.background='var(--hover)'} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>✍️ Manuel</button>
+                  <button onClick={() => { setShowImportMenu(false); router.push('/dashboard/ingredients/import') }} style={{ display:'block', width:'100%', textAlign:'left', padding:'10px 14px', background:'transparent', border:'none', color:'inherit', cursor:'pointer', fontSize:'13px' }} onMouseEnter={e=>e.currentTarget.style.background='var(--hover)'} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>📸 Photo (facture)</button>
+                  <button onClick={() => { setShowImportMenu(false); document.getElementById('excel-input').click() }} style={{ display:'block', width:'100%', textAlign:'left', padding:'10px 14px', background:'transparent', border:'none', color:'inherit', cursor:'pointer', fontSize:'13px' }} onMouseEnter={e=>e.currentTarget.style.background='var(--hover)'} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>📊 Fichier Excel</button>
+                </div>
+              )}
+              <input id="excel-input" type="file" accept=".xlsx,.xls" onChange={importExcel} style={{ display:'none' }} />
+            </div>
           </div>
         </div>
 
         {/* Onglets */}
         <div style={{ display:'flex', gap:'4px', marginBottom:'20px', borderBottom:'1px solid var(--border)', paddingBottom:'0' }}>
-          {[['liste','📋 Liste'],['fournisseurs','🏪 Fournisseurs']].map(([k,l]) => (
+          {[['liste','📋 Liste'],['fournisseurs','🏪 Fournisseurs'],['doublons',`⚠️ Doublons${doublonsDetectes.length ? ' ('+doublonsDetectes.length+')' : ''}`]].map(([k,l]) => (
             <button key={k} onClick={() => setOnglet(k)} style={{ padding:'8px 20px', borderRadius:'8px 8px 0 0', background: onglet===k ? 'var(--card)' : 'transparent', border: onglet===k ? '1px solid var(--border)' : '1px solid transparent', borderBottom: onglet===k ? '1px solid var(--card)' : '1px solid transparent', color: onglet===k ? 'inherit' : 'var(--muted)', cursor:'pointer', fontSize:'14px', marginBottom:'-1px' }}>
               {l}
             </button>
@@ -217,6 +319,12 @@ export default function Ingredients() {
 
         {onglet === 'liste' && (
           <>
+            {editMode && selected.length > 0 && (
+              <div style={{ display:'flex', alignItems:'center', gap:'12px', marginBottom:'12px', padding:'10px 16px', background:'rgba(0,194,255,0.08)', border:'1px solid rgba(0,194,255,0.3)', borderRadius:'8px' }}>
+                <span style={{ fontSize:'13px' }}>{selected.length} sélectionné(s)</span>
+                <button onClick={regrouperSelection} style={{ padding:'6px 14px', borderRadius:'6px', background:'#00C2FF', color:'#0A0F1E', fontWeight:'700', border:'none', cursor:'pointer', fontSize:'13px' }}>🔗 Regrouper</button>
+              </div>
+            )}
             <div style={{ display:'flex', gap:'10px', marginBottom:'16px' }}>
               <div style={{ flex:1, position:'relative' }}>
                 <span style={{ position:'absolute', left:'12px', top:'50%', transform:'translateY(-50%)', color:'var(--muted)' }}>🔍</span>
@@ -380,7 +488,63 @@ export default function Ingredients() {
             )}
           </div>
         )}
+        {onglet === 'doublons' && (
+          <div>
+            {doublonsDetectes.length === 0 && (
+              <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'48px', textAlign:'center' }}>
+                <p style={{ color:'var(--muted)', fontSize:'14px' }}>Aucun doublon détecté (basé sur le nom exact, une fois nettoyé des espaces/majuscules)</p>
+              </div>
+            )}
+            {doublonsDetectes.map((group, gi) => {
+              const key = group[0].nom.toLowerCase().trim()
+              const inclus = fusionInclus[key] || group.map(g => g.id)
+              return (
+                <div key={gi} style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'20px', marginBottom:'16px' }}>
+                  <p style={{ fontWeight:'600', marginBottom:'12px' }}>{group[0].nom} <span style={{ color:'var(--muted)', fontSize:'12px', fontWeight:'400' }}>({group.length} exemplaires)</span></p>
+                  {group.map(ing => {
+                    const estInclus = inclus.includes(ing.id)
+                    return (
+                      <div key={ing.id} style={{ display:'flex', alignItems:'center', gap:'10px', padding:'8px 0', borderBottom:'1px solid var(--border)' }}>
+                        <input type="checkbox" checked={estInclus} onChange={e => {
+                          const next = e.target.checked ? [...inclus, ing.id] : inclus.filter(id => id !== ing.id)
+                          setFusionInclus({ ...fusionInclus, [key]: next })
+                        }} title="Inclure dans la fusion" />
+                        <input type="radio" name={'fusion-'+gi} disabled={!estInclus} checked={(fusionChoix[key]||group[0].id)===ing.id} onChange={() => setFusionChoix({...fusionChoix,[key]:ing.id})} title="Garder celui-ci" />
+                        <span style={{ fontSize:'13px', opacity: estInclus ? 1 : 0.4 }}>{ing.fournisseur||'Sans fournisseur'} · {ing.marque||'—'} · {parseFloat(ing.prix_unitaire).toFixed(2)}$/{ing.unite}</span>
+                      </div>
+                    )
+                  })}
+                  <div style={{ display:'flex', gap:'10px', marginTop:'12px' }}>
+                    <button onClick={() => fusionner(group)} style={{ padding:'8px 16px', borderRadius:'8px', background:'#00C2FF', color:'#0A0F1E', fontWeight:'700', border:'none', cursor:'pointer', fontSize:'13px' }}>Fusionner {inclus.length} ingrédient(s) sélectionné(s)</button>
+                    <button onClick={() => garderSepares(key)} style={{ padding:'8px 16px', borderRadius:'8px', background:'transparent', border:'1px solid var(--border)', color:'var(--muted)', cursor:'pointer', fontSize:'13px' }}>Garder séparés (ne plus signaler)</button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
+
+      {conflitsImport && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:300, display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'24px', maxWidth:'600px', width:'90%', maxHeight:'80vh', overflowY:'auto' }}>
+            <p style={{ fontWeight:'700', marginBottom:'16px' }}>{conflitsImport.conflits.length} changement(s) de prix détecté(s)</p>
+            {conflitsImport.conflits.map((c, i) => (
+              <div key={i} style={{ marginBottom:'14px', paddingBottom:'14px', borderBottom:'1px solid var(--border)' }}>
+                <p style={{ fontSize:'14px', marginBottom:'8px' }}>{c.existant.nom} ({c.existant.fournisseur||'sans fournisseur'}) — {parseFloat(c.existant.prix_unitaire).toFixed(2)}$ → {parseFloat(c.row.prix_unitaire).toFixed(2)}$</p>
+                <div style={{ display:'flex', gap:'8px' }}>
+                  <button onClick={() => setConflitsImport(prev => ({ ...prev, choix: prev.choix.map((v,j) => j===i ? 'remplacer' : v) }))} style={{ padding:'6px 12px', borderRadius:'6px', border:'1px solid '+(conflitsImport.choix[i]==='remplacer'?'#00C2FF':'var(--border)'), background: conflitsImport.choix[i]==='remplacer'?'rgba(0,194,255,0.15)':'transparent', color:'inherit', cursor:'pointer', fontSize:'12px' }}>Remplacer le prix</button>
+                  <button onClick={() => setConflitsImport(prev => ({ ...prev, choix: prev.choix.map((v,j) => j===i ? 'nouveau' : v) }))} style={{ padding:'6px 12px', borderRadius:'6px', border:'1px solid '+(conflitsImport.choix[i]==='nouveau'?'#00C2FF':'var(--border)'), background: conflitsImport.choix[i]==='nouveau'?'rgba(0,194,255,0.15)':'transparent', color:'inherit', cursor:'pointer', fontSize:'12px' }}>Créer un ingrédient séparé</button>
+                </div>
+              </div>
+            ))}
+            <div style={{ display:'flex', gap:'10px', marginTop:'16px' }}>
+              <button onClick={confirmerConflits} style={{ flex:1, padding:'10px', borderRadius:'8px', background:'#00C2FF', color:'#0A0F1E', fontWeight:'700', border:'none', cursor:'pointer' }}>Confirmer l'import</button>
+              <button onClick={() => setConflitsImport(null)} style={{ flex:1, padding:'10px', borderRadius:'8px', background:'transparent', border:'1px solid var(--border)', color:'inherit', cursor:'pointer' }}>Annuler ces changements</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {drawerIng && (
         <div style={{ position:'fixed', top:0, right:0, bottom:0, width:'33vw', minWidth:'300px', background:'var(--card)', borderLeft:'1px solid var(--border)', zIndex:200, overflowY:'auto', padding:'24px' }}>

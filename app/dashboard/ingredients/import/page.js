@@ -1,4 +1,3 @@
-cat > app/dashboard/ingredients/import/page.js << 'EOF'
 'use client'
 import { useState, useEffect } from 'react'
 import { createClient } from '../../../../lib/supabase'
@@ -8,12 +7,14 @@ const CATEGORIES = ['Viandes','Produits laitiers','Légumes','Fruits','Épicerie
 
 export default function ImportFacture() {
   const [orgId, setOrgId] = useState(null)
+  const [ingredients, setIngredients] = useState([])
   const [preview, setPreview] = useState(null)
   const [loading, setLoading] = useState(false)
   const [extraits, setExtraits] = useState([])
   const [selected, setSelected] = useState([])
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [conflitsImport, setConflitsImport] = useState(null)
   const supabase = createClient()
   const router = useRouter()
 
@@ -25,6 +26,23 @@ export default function ImportFacture() {
     const { data: member } = await supabase.from('organization_members').select('organization_id').eq('user_id', user.id).single()
     if (!member) return router.push('/dashboard/restaurant')
     setOrgId(member.organization_id)
+    const { data: ing } = await supabase.from('ingredients').select('*').eq('organization_id', member.organization_id).eq('archived', false)
+    setIngredients(ing || [])
+  }
+
+  function convertirEnJpeg(dataUrl) {
+    return new Promise((resolve, reject) => {
+      const img = new Image()
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        canvas.width = img.naturalWidth
+        canvas.height = img.naturalHeight
+        canvas.getContext('2d').drawImage(img, 0, 0)
+        resolve(canvas.toDataURL('image/jpeg', 0.92))
+      }
+      img.onerror = () => reject(new Error("Impossible de lire cette image (format non supporté par le navigateur)"))
+      img.src = dataUrl
+    })
   }
 
   async function onFile(e) {
@@ -39,7 +57,8 @@ export default function ImportFacture() {
       setPreview(dataUrl)
       setLoading(true)
       try {
-        const res = await fetch('/api/facture', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image: dataUrl }) })
+        const jpegUrl = await convertirEnJpeg(dataUrl)
+        const res = await fetch('/api/facture', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image: jpegUrl }) })
         const data = await res.json()
         if (!res.ok) throw new Error(data.error || 'Erreur analyse')
         const items = (data.ingredients || []).map((it, i) => ({ ...it, _id: i }))
@@ -58,18 +77,50 @@ export default function ImportFacture() {
     setExtraits(prev => prev.map(it => it._id === id ? { ...it, [field]: value } : it))
   }
 
+  function champsDe(it) {
+    const { _id, note, prix_unitaire_100g, ...rest } = it
+    const prix_achat = parseFloat(rest.prix_achat) || 0
+    const qte_achetee = parseFloat(rest.qte_achetee) || 1
+    return { ...rest, prix_achat, qte_achetee, prix_unitaire: prix_achat / qte_achetee }
+  }
+
+  async function appliquerLignes(lignes) {
+    for (const { it, existant } of lignes) {
+      const champs = champsDe(it)
+      if (existant) await supabase.from('ingredients').update(champs).eq('id', existant.id)
+      else await supabase.from('ingredients').insert({ ...champs, organization_id: orgId, archived: false })
+    }
+  }
+
   async function importer() {
-    const toInsert = extraits.filter(it => selected.includes(it._id)).map(({ _id, note, prix_unitaire_100g, ...rest }) => ({
-      ...rest,
-      organization_id: orgId,
-      prix_achat: parseFloat(rest.prix_achat) || 0,
-      qte_achetee: parseFloat(rest.qte_achetee) || 1,
-      prix_unitaire: (parseFloat(rest.prix_achat) || 0) / (parseFloat(rest.qte_achetee) || 1),
-      archived: false,
-    }))
-    if (!toInsert.length) return
+    const aInserer = extraits.filter(it => selected.includes(it._id))
+    const conflits = [], aTraiter = []
+    for (const it of aInserer) {
+      const nomNorm = (it.nom||'').toLowerCase().trim()
+      const existant = ingredients.find(i => i.nom.toLowerCase().trim() === nomNorm && (i.fournisseur||'') === (it.fournisseur||''))
+      const nouveauPrix = champsDe(it).prix_unitaire
+      if (existant && parseFloat(existant.prix_unitaire) !== nouveauPrix) conflits.push({ it, existant })
+      else aTraiter.push({ it, existant })
+    }
     setSaving(true)
-    await supabase.from('ingredients').insert(toInsert)
+    await appliquerLignes(aTraiter)
+    setSaving(false)
+    if (conflits.length > 0) setConflitsImport({ conflits, choix: conflits.map(() => 'remplacer') })
+    else router.push('/dashboard/ingredients')
+  }
+
+  async function confirmerConflits() {
+    const { conflits, choix } = conflitsImport
+    for (let i = 0; i < conflits.length; i++) {
+      const { it, existant } = conflits[i]
+      const champs = champsDe(it)
+      if (choix[i] === 'remplacer') {
+        await supabase.from('ingredients_prix_historique').insert({ ingredient_id: existant.id, prix: existant.prix_unitaire })
+        await supabase.from('ingredients').update(champs).eq('id', existant.id)
+      } else {
+        await supabase.from('ingredients').insert({ ...champs, organization_id: orgId, archived: false })
+      }
+    }
     router.push('/dashboard/ingredients')
   }
 
@@ -115,8 +166,27 @@ export default function ImportFacture() {
           </button>
         </div>
       )}
+
+      {conflitsImport && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:300, display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'24px', maxWidth:'600px', width:'90%', maxHeight:'80vh', overflowY:'auto' }}>
+            <p style={{ fontWeight:'700', marginBottom:'16px' }}>{conflitsImport.conflits.length} changement(s) de prix détecté(s)</p>
+            {conflitsImport.conflits.map((c, i) => (
+              <div key={i} style={{ marginBottom:'14px', paddingBottom:'14px', borderBottom:'1px solid var(--border)' }}>
+                <p style={{ fontSize:'14px', marginBottom:'8px' }}>{c.existant.nom} ({c.existant.fournisseur||'sans fournisseur'}) — {parseFloat(c.existant.prix_unitaire).toFixed(2)}$ → {champsDe(c.it).prix_unitaire.toFixed(2)}$</p>
+                <div style={{ display:'flex', gap:'8px' }}>
+                  <button onClick={() => setConflitsImport(prev => ({ ...prev, choix: prev.choix.map((v,j) => j===i ? 'remplacer' : v) }))} style={{ padding:'6px 12px', borderRadius:'6px', border:'1px solid '+(conflitsImport.choix[i]==='remplacer'?'#00C2FF':'var(--border)'), background: conflitsImport.choix[i]==='remplacer'?'rgba(0,194,255,0.15)':'transparent', color:'inherit', cursor:'pointer', fontSize:'12px' }}>Remplacer le prix</button>
+                  <button onClick={() => setConflitsImport(prev => ({ ...prev, choix: prev.choix.map((v,j) => j===i ? 'nouveau' : v) }))} style={{ padding:'6px 12px', borderRadius:'6px', border:'1px solid '+(conflitsImport.choix[i]==='nouveau'?'#00C2FF':'var(--border)'), background: conflitsImport.choix[i]==='nouveau'?'rgba(0,194,255,0.15)':'transparent', color:'inherit', cursor:'pointer', fontSize:'12px' }}>Créer un ingrédient séparé</button>
+                </div>
+              </div>
+            ))}
+            <div style={{ display:'flex', gap:'10px', marginTop:'16px' }}>
+              <button onClick={confirmerConflits} style={{ flex:1, padding:'10px', borderRadius:'8px', background:'#00C2FF', color:'#0A0F1E', fontWeight:'700', border:'none', cursor:'pointer' }}>Confirmer l'import</button>
+              <button onClick={() => router.push('/dashboard/ingredients')} style={{ flex:1, padding:'10px', borderRadius:'8px', background:'transparent', border:'1px solid var(--border)', color:'inherit', cursor:'pointer' }}>Ignorer ces changements</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
-EOF
-echo "✅ import/page.js remplacé"

@@ -1,4 +1,3 @@
-cat > app/dashboard/ingredients/nouveau/page.js << 'EOF'
 'use client'
 import { useState, useEffect } from 'react'
 import { createClient } from '../../../../lib/supabase'
@@ -96,5 +95,3 @@ export default function NouvelIngredient() {
     </div>
   )
 }
-EOF
-echo "✅ nouveau/page.js remplacé"
