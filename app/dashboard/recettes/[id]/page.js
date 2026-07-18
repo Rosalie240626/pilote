@@ -4,11 +4,13 @@ import { createClient } from '../../../../lib/supabase'
 import { useRouter, useParams } from 'next/navigation'
 
 export default function DetailRecette() {
-  const [form, setForm] = useState({ nom: '', prix_vente: '', categorie: '' })
+  const [form, setForm] = useState({ nom: '', prix_vente: '', categorie: '', sous_categorie: '' })
   const [ingredients, setIngredients] = useState([])
   const [lignes, setLignes] = useState([])
   const [orgId, setOrgId] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [categoriesExistantes, setCategoriesExistantes] = useState([])
+  const [sousCategoriesExistantes, setSousCategoriesExistantes] = useState([])
   const supabase = createClient()
   const router = useRouter()
   const params = useParams()
@@ -23,10 +25,13 @@ export default function DetailRecette() {
     setOrgId(member.organization_id)
     const { data: allIng } = await supabase.from('ingredients').select('*').eq('organization_id', member.organization_id).eq('archived', false).eq('hors_inventaire', false).order('nom')
     setIngredients(allIng || [])
-    const { data: recette } = await supabase.from('recettes').select('*, recette_ingredients(id, ingredient_id, grammage)').eq('id', params.id).single()
+    const { data: recette } = await supabase.from('recettes').select('*, recette_ingredients(id, ingredient_id, grammage, rendement)').eq('id', params.id).single()
     if (!recette) return router.push('/dashboard/recettes')
-    setForm({ nom: recette.nom, prix_vente: recette.prix_vente || '', categorie: recette.categorie || '' })
-    setLignes((recette.recette_ingredients || []).map(ri => ({ ingredient_id: ri.ingredient_id, grammage: ri.grammage })))
+    setForm({ nom: recette.nom, prix_vente: recette.prix_vente || '', categorie: recette.categorie || '', sous_categorie: recette.sous_categorie || '' })
+    setLignes((recette.recette_ingredients || []).map(ri => ({ ingredient_id: ri.ingredient_id, grammage: ri.grammage, rendement: ri.rendement || 100 })))
+    const { data: toutesRecettes } = await supabase.from('recettes').select('categorie, sous_categorie').eq('organization_id', member.organization_id)
+    setCategoriesExistantes([...new Set((toutesRecettes||[]).map(r => r.categorie).filter(Boolean))])
+    setSousCategoriesExistantes([...new Set((toutesRecettes||[]).map(r => r.sous_categorie).filter(Boolean))])
     setLoading(false)
   }
 
@@ -42,7 +47,8 @@ export default function DetailRecette() {
       const ing = ingredients.find(i => i.id === l.ingredient_id)
       if (!ing || !l.grammage) return acc
       const f = (ing.unite === 'g' || ing.unite === 'ml') ? l.grammage / 1000 : parseFloat(l.grammage)
-      return acc + (ing.prix_unitaire * f)
+      const rendement = parseFloat(l.rendement) || 100
+      return acc + ((ing.prix_unitaire * f) / (rendement / 100))
     }, 0)
   }
 
@@ -51,7 +57,7 @@ export default function DetailRecette() {
     await supabase.from('recettes').update({ ...form, prix_vente: parseFloat(form.prix_vente) || null }).eq('id', params.id)
     await supabase.from('recette_ingredients').delete().eq('recette_id', params.id)
     const lignesValides = lignes.filter(l => l.ingredient_id && l.grammage)
-    if (lignesValides.length > 0) await supabase.from('recette_ingredients').insert(lignesValides.map(l => ({ recette_id: params.id, ingredient_id: l.ingredient_id, grammage: parseFloat(l.grammage) })))
+    if (lignesValides.length > 0) await supabase.from('recette_ingredients').insert(lignesValides.map(l => ({ recette_id: params.id, ingredient_id: l.ingredient_id, grammage: parseFloat(l.grammage), rendement: parseFloat(l.rendement) || 100 })))
     router.push('/dashboard/recettes')
   }
 
@@ -69,7 +75,7 @@ export default function DetailRecette() {
   if (loading) return <p style={{ color: 'var(--muted)' }}>Chargement...</p>
 
   return (
-    <div style={{ maxWidth: '700px' }}>
+    <div style={{ maxWidth: '760px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
         <div>
           <h1 style={{ fontSize: '22px', fontWeight: '700', marginBottom: '4px' }}>{form.nom}</h1>
@@ -82,13 +88,18 @@ export default function DetailRecette() {
       </div>
 
       <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '20px', marginBottom: '16px' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '12px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px', marginBottom: '12px' }}>
           <div><label style={{ color: 'var(--muted)', fontSize: '12px', display: 'block', marginBottom: '6px' }}>NOM *</label><input value={form.nom} onChange={e => setForm({ ...form, nom: e.target.value })} style={inp} /></div>
           <div><label style={{ color: 'var(--muted)', fontSize: '12px', display: 'block', marginBottom: '6px' }}>PRIX DE VENTE ($)</label><input type="number" value={form.prix_vente} onChange={e => setForm({ ...form, prix_vente: e.target.value })} style={inp} /></div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
           <div><label style={{ color: 'var(--muted)', fontSize: '12px', display: 'block', marginBottom: '6px' }}>CATÉGORIE</label>
-            <select value={form.categorie} onChange={e => setForm({ ...form, categorie: e.target.value })} style={inp}>
-              {['','Entrée','Plat principal','Dessert','Boisson','Accompagnement'].map(c => <option key={c} value={c}>{c || 'Choisir...'}</option>)}
-            </select>
+            <input list="categories-list" placeholder="ex: Plats principaux" value={form.categorie} onChange={e => setForm({ ...form, categorie: e.target.value })} style={inp} />
+            <datalist id="categories-list">{categoriesExistantes.map(c => <option key={c} value={c} />)}</datalist>
+          </div>
+          <div><label style={{ color: 'var(--muted)', fontSize: '12px', display: 'block', marginBottom: '6px' }}>SOUS-CATÉGORIE</label>
+            <input list="souscategories-list" placeholder="ex: Burgers" value={form.sous_categorie} onChange={e => setForm({ ...form, sous_categorie: e.target.value })} style={inp} />
+            <datalist id="souscategories-list">{sousCategoriesExistantes.map(c => <option key={c} value={c} />)}</datalist>
           </div>
         </div>
       </div>
@@ -100,12 +111,13 @@ export default function DetailRecette() {
           const alt = ing ? meilleurPrix(ing) : null
           return (
             <div key={i} style={{ marginBottom: '10px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '3fr 1fr 40px', gap: '10px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '3fr 1fr 1fr 40px', gap: '10px' }}>
                 <select value={l.ingredient_id} onChange={e => { const n = [...lignes]; n[i].ingredient_id = e.target.value; setLignes(n) }} style={inp}>
                   <option value="">Choisir...</option>
                   {ingredients.map(o => <option key={o.id} value={o.id}>{o.nom} ({o.unite})</option>)}
                 </select>
                 <input type="number" placeholder="Quantité" value={l.grammage} onChange={e => { const n = [...lignes]; n[i].grammage = e.target.value; setLignes(n) }} style={inp} />
+                <input type="number" placeholder="Rendement %" title="% utilisable après perte/parage (100 = aucune perte)" value={l.rendement} onChange={e => { const n = [...lignes]; n[i].rendement = e.target.value; setLignes(n) }} style={inp} />
                 <button onClick={() => setLignes(lignes.filter((_, j) => j !== i))} style={{ background: 'none', border: 'none', color: '#FF4D6D', cursor: 'pointer', fontSize: '20px' }}>×</button>
               </div>
               {ing && (
@@ -117,12 +129,12 @@ export default function DetailRecette() {
             </div>
           )
         })}
-        <button onClick={() => setLignes([...lignes, { ingredient_id: '', grammage: '' }])} style={{ padding: '7px 16px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--muted)', cursor: 'pointer', fontSize: '13px' }}>+ Ajouter ingrédient</button>
+        <button onClick={() => setLignes([...lignes, { ingredient_id: '', grammage: '', rendement: '100' }])} style={{ padding: '7px 16px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--muted)', cursor: 'pointer', fontSize: '13px' }}>+ Ajouter ingrédient</button>
       </div>
 
       {cout > 0 && (
         <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '16px 20px', marginBottom: '16px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', textAlign: 'center' }}>
-          <div><div style={{ color: 'var(--muted)', fontSize: '12px', marginBottom: '4px' }}>COÛT MATIÈRE</div><div style={{ fontWeight: '700', fontSize: '20px', color: '#00C2FF' }}>{cout.toFixed(2)}$</div></div>
+          <div><div style={{ color: 'var(--muted)', fontSize: '12px', marginBottom: '4px' }}>COÛT MATIÈRE RÉEL</div><div style={{ fontWeight: '700', fontSize: '20px', color: '#00C2FF' }}>{cout.toFixed(2)}$</div></div>
           <div><div style={{ color: 'var(--muted)', fontSize: '12px', marginBottom: '4px' }}>PRIX DE VENTE</div><div style={{ fontWeight: '700', fontSize: '20px' }}>{form.prix_vente ? `${parseFloat(form.prix_vente).toFixed(2)}$` : '—'}</div></div>
           <div><div style={{ color: 'var(--muted)', fontSize: '12px', marginBottom: '4px' }}>FOOD COST</div><div style={{ fontWeight: '700', fontSize: '20px', color: fc ? (fc <= 30 ? '#00E5A0' : fc <= 35 ? '#F5A623' : '#FF4D6D') : 'var(--muted)' }}>{fc ? `${fc}%` : '—'}</div></div>
         </div>
