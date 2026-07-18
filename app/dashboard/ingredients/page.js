@@ -99,7 +99,7 @@ export default function Ingredients() {
     }))
   }, [historique, ingFournisseur])
 
-  const [analyseMode, setAnalyseMode] = useState('produit')
+  const [analyseMode, setAnalyseMode] = useState('liaison')
   const [groupeSelectionne, setGroupeSelectionne] = useState('')
   const [fournisseurSelectionne, setFournisseurSelectionne] = useState('')
   const [indiceExterne, setIndiceExterne] = useState(null)
@@ -163,8 +163,9 @@ export default function Ingredients() {
 
   const produitsListe = useMemo(() => groupesAvecCategorie.filter(g =>
     (!searchFiche || g.nom.toLowerCase().includes(searchFiche.toLowerCase())) &&
-    (!categorieFiche || g.categorie === categorieFiche)
-  ), [groupesAvecCategorie, searchFiche, categorieFiche])
+    (!categorieFiche || g.categorie === categorieFiche) &&
+    (analyseMode !== 'liaison' || groupesExistants.includes(g.nom))
+  ), [groupesAvecCategorie, searchFiche, categorieFiche, analyseMode, groupesExistants])
 
   const fournisseursListe = useMemo(() => fournisseurs.filter(f => !searchFiche || f.toLowerCase().includes(searchFiche.toLowerCase())), [fournisseurs, searchFiche])
 
@@ -217,7 +218,7 @@ export default function Ingredients() {
 
   function exporterFiche() {
     let texte = ''
-    if (analyseMode === 'produit' && groupeSelectionne && statsGroupe) {
+    if (analyseMode !== 'fournisseur' && groupeSelectionne && statsGroupe) {
       texte = `${groupeSelectionne}\n\nFournisseurs: ${statsGroupe.nbFournisseurs}\nMeilleur prix: ${statsGroupe.meilleurPrix?.toFixed(2)}$/${statsGroupe.unite}\nPrix moyen: ${statsGroupe.prixMoyen?.toFixed(2)}$/${statsGroupe.unite}\n\nClassement:\n` + statsGroupe.classement.map(i => `- ${i.fournisseur||'?'}: ${parseFloat(i.prix_unitaire).toFixed(2)}$/${i.unite}`).join('\n')
     } else if (analyseMode === 'fournisseur' && fournisseurSelectionne && statsFournisseur) {
       texte = `${fournisseurSelectionne}\n\nProduits: ${statsFournisseur.nbProduits}\n\n` + produitsDuFournisseur.map(({ing}) => `- ${ing.nom}: ${parseFloat(ing.prix_unitaire).toFixed(2)}$/${ing.unite}`).join('\n')
@@ -235,9 +236,7 @@ export default function Ingredients() {
   const [categorieStatsF, setCategorieStatsF] = useState('')
   const [seuilAlerte, setSeuilAlerte] = useState(10)
   const [showSeuil, setShowSeuil] = useState(false)
-  const [modeDuel, setModeDuel] = useState(false)
-  const [duelA, setDuelA] = useState('')
-  const [duelB, setDuelB] = useState('')
+  const [fournisseursCoches, setFournisseursCoches] = useState([])
 
   const statsFournisseursTous = useMemo(() => {
     return fournisseurs.map(f => {
@@ -272,16 +271,6 @@ export default function Ingredients() {
     return { label:'stable', bg:'rgba(0,229,160,0.15)', color:'#00E5A0' }
   }
 
-  const duelData = useMemo(() => {
-    if (!duelA || !duelB) return null
-    const itemsA = ingredients.filter(i => i.fournisseur === duelA && i.ingredient_base)
-    const itemsB = ingredients.filter(i => i.fournisseur === duelB && i.ingredient_base)
-    const communs = itemsA.filter(ia => itemsB.some(ib => ib.ingredient_base === ia.ingredient_base)).map(ia => {
-      const ib = itemsB.find(ib => ib.ingredient_base === ia.ingredient_base)
-      return { nom: ia.ingredient_base, ingA: ia, ingB: ib }
-    })
-    return communs
-  }, [ingredients, duelA, duelB])
 
   const comparaisonFiltree = useMemo(() => comparaisonData.filter(r =>
     (!searchComparatif || r.nom.toLowerCase().includes(searchComparatif.toLowerCase())) &&
@@ -466,16 +455,6 @@ export default function Ingredients() {
   const [showImportMenu, setShowImportMenu] = useState(false)
   const [conflitsImport, setConflitsImport] = useState(null)
 
-  const [lienChoisi, setLienChoisi] = useState('')
-  const [nouveauLien, setNouveauLien] = useState('')
-
-  const ingredientsHorsLien = useMemo(() => {
-    if (!lienChoisi) return []
-    return ingredientsActifs.filter(i => i.ingredient_base !== lienChoisi).sort((a,b) => a.nom.localeCompare(b.nom))
-  }, [ingredientsActifs, lienChoisi])
-
-  const [selectionLien, setSelectionLien] = useState([])
-
   async function retirerDuLien(ing) {
     await supabase.from('ingredients').update({ ingredient_base: null }).eq('id', ing.id)
     await reload()
@@ -492,13 +471,9 @@ export default function Ingredients() {
     return Object.entries(groupes).sort((a,b) => a[0].localeCompare(b[0]))
   }, [ingredientsActifs])
 
-  async function ajouterAuLien() {
-    if (!lienChoisi || !selectionLien.length) return
-    await supabase.from('ingredients').update({ ingredient_base: lienChoisi }).in('id', selectionLien)
-    await reload()
-    setSelectionLien([])
-    setToast(`✓ ${selectionLien.length} ingrédients ajoutés au lien "${lienChoisi}"`)
-  }
+  const [suggestionsSectionOuverte, setSuggestionsSectionOuverte] = useState(false)
+  const [ajoutOuvert, setAjoutOuvert] = useState({})
+  const [rechercheAjout, setRechercheAjout] = useState({})
 
   const suggestionsLiens = useMemo(() => {
     const mots = {}
@@ -715,11 +690,11 @@ export default function Ingredients() {
               {/* Liste cherchable */}
               <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'16px' }}>
                 <div style={{ display:'flex', gap:'6px', marginBottom:'12px' }}>
-                  <button onClick={() => setAnalyseMode('produit')} style={{ flex:1, padding:'6px', borderRadius:'6px', border:'1px solid '+(analyseMode==='produit'?'#00C2FF':'var(--border)'), background: analyseMode==='produit'?'rgba(0,194,255,0.1)':'transparent', color: analyseMode==='produit'?'#00C2FF':'var(--muted)', cursor:'pointer', fontSize:'12px' }}>Par produit</button>
+                  <button onClick={() => setAnalyseMode('liaison')} style={{ flex:1, padding:'6px', borderRadius:'6px', border:'1px solid '+(analyseMode==='liaison'?'#00C2FF':'var(--border)'), background: analyseMode==='liaison'?'rgba(0,194,255,0.1)':'transparent', color: analyseMode==='liaison'?'#00C2FF':'var(--muted)', cursor:'pointer', fontSize:'12px' }}>🔗 Par liaison</button>
                   <button onClick={() => setAnalyseMode('fournisseur')} style={{ flex:1, padding:'6px', borderRadius:'6px', border:'1px solid '+(analyseMode==='fournisseur'?'#00C2FF':'var(--border)'), background: analyseMode==='fournisseur'?'rgba(0,194,255,0.1)':'transparent', color: analyseMode==='fournisseur'?'#00C2FF':'var(--muted)', cursor:'pointer', fontSize:'12px' }}>Fournisseur</button>
                 </div>
-                <input placeholder={analyseMode==='produit' ? 'Rechercher un produit' : 'Rechercher un fournisseur'} value={searchFiche} onChange={e => setSearchFiche(e.target.value)} style={{ ...inp, marginBottom:'8px' }} />
-                {analyseMode === 'produit' && (
+                <input placeholder={analyseMode==='fournisseur' ? 'Rechercher un fournisseur' : 'Rechercher un produit'} value={searchFiche} onChange={e => setSearchFiche(e.target.value)} style={{ ...inp, marginBottom:'8px' }} />
+                {analyseMode !== 'fournisseur' && (
                   <select value={categorieFiche} onChange={e => setCategorieFiche(e.target.value)} style={{ ...inp, marginBottom:'10px' }}>
                     <option value=''>Toutes catégories</option>
                     {CATEGORIES.map(c => <option key={c}>{c}</option>)}
@@ -727,19 +702,19 @@ export default function Ingredients() {
                 )}
                 <style>{`.pilote-scroll::-webkit-scrollbar{width:6px}.pilote-scroll::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}.pilote-scroll::-webkit-scrollbar-track{background:transparent}`}</style>
                 <div className="pilote-scroll" style={{ maxHeight:'340px', overflowY:'auto' }}>
-                  {analyseMode === 'produit' ? produitsListe.map(g => (
+                  {analyseMode !== 'fournisseur' ? produitsListe.map(g => (
                     <div key={g.nom} onClick={() => setGroupeSelectionne(g.nom)} style={{ padding:'8px 10px', borderRadius:'6px', fontSize:'13px', cursor:'pointer', background: groupeSelectionne===g.nom ? 'rgba(0,194,255,0.12)' : 'transparent', color: groupeSelectionne===g.nom ? '#00C2FF' : 'inherit' }}>{g.nom}</div>
                   )) : fournisseursListe.map(f => (
                     <div key={f} onClick={() => setFournisseurSelectionne(f)} style={{ padding:'8px 10px', borderRadius:'6px', fontSize:'13px', cursor:'pointer', background: fournisseurSelectionne===f ? 'rgba(0,194,255,0.12)' : 'transparent', color: fournisseurSelectionne===f ? '#00C2FF' : 'inherit' }}>{f}</div>
                   ))}
-                  {analyseMode==='produit' && produitsListe.length===0 && <p style={{ color:'var(--muted)', fontSize:'12px' }}>Aucun résultat</p>}
+                  {analyseMode!=='fournisseur' && produitsListe.length===0 && <p style={{ color:'var(--muted)', fontSize:'12px' }}>Aucun résultat</p>}
                   {analyseMode==='fournisseur' && fournisseursListe.length===0 && <p style={{ color:'var(--muted)', fontSize:'12px' }}>Aucun résultat</p>}
                 </div>
               </div>
 
               {/* Fiche */}
               <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'20px' }}>
-                {analyseMode === 'produit' && (
+                {analyseMode !== 'fournisseur' && (
                   groupeSelectionne && statsGroupe ? (
                     <>
                       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' }}>
@@ -773,7 +748,12 @@ export default function Ingredients() {
                       )}
                       {comparaisonGroupeData.forecast && (
                         <p style={{ fontSize:'12px', color:'var(--muted)', marginTop:'8px' }}>
-                          Tendance : <span style={{ color: comparaisonGroupeData.forecast.tauxAnnuel >= 0 ? '#FF4D6D' : '#00E5A0', fontWeight:'700' }}>{comparaisonGroupeData.forecast.tauxAnnuel >= 0 ? '+' : ''}{(comparaisonGroupeData.forecast.tauxAnnuel*100).toFixed(1)}%/an</span> → {comparaisonGroupeData.forecast.prixEstime.toFixed(2)}$ dans 1 an
+                          Tendance (ton historique) : <span style={{ color: comparaisonGroupeData.forecast.tauxAnnuel >= 0 ? '#FF4D6D' : '#00E5A0', fontWeight:'700' }}>{comparaisonGroupeData.forecast.tauxAnnuel >= 0 ? '+' : ''}{(comparaisonGroupeData.forecast.tauxAnnuel*100).toFixed(1)}%/an</span> → {comparaisonGroupeData.forecast.prixEstime.toFixed(2)}$ dans 1 an
+                        </p>
+                      )}
+                      {indiceExterne && statsGroupe.meilleurPrix && (
+                        <p style={{ fontSize:'12px', color:'var(--muted)', marginTop:'4px' }}>
+                          Tendance (indice StatCan) : <span style={{ color: indiceExterne.variation12mois >= 0 ? '#F5A623' : '#00C2FF', fontWeight:'700' }}>{indiceExterne.variation12mois >= 0 ? '+' : ''}{indiceExterne.variation12mois}%/an</span> → {(statsGroupe.meilleurPrix * (1 + indiceExterne.variation12mois/100)).toFixed(2)}$ dans 1 an
                         </p>
                       )}
                       {indiceExterne && (
@@ -784,6 +764,8 @@ export default function Ingredients() {
                         </div>
                       )}
                       {economiePotentielle && <p style={{ fontSize:'12px', color:'#F5A623', marginTop:'8px' }}>💡 Économie potentielle sur tes recettes actuelles : {economiePotentielle.toFixed(2)}$ (si toujours acheté au meilleur prix)</p>}
+                      {statsGroupe.classement.length > 1 && (
+                      <>
                       <p style={{ fontSize:'11px', color:'var(--muted)', marginTop:'12px', marginBottom:'6px', textTransform:'uppercase' }}>Classement</p>
                       {statsGroupe.classement.map((ing,i) => (
                         <div key={ing.id}>
@@ -816,6 +798,8 @@ export default function Ingredients() {
                           )}
                         </div>
                       ))}
+                      </>
+                      )}
                     </>
                   ) : <p style={{ color:'var(--muted)', fontSize:'13px', textAlign:'center', marginTop:'40px' }}>Sélectionne un produit à gauche</p>
                 )}
@@ -825,7 +809,10 @@ export default function Ingredients() {
                     <>
                       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' }}>
                         <span style={{ fontWeight:'700', fontSize:'18px' }}>{fournisseurSelectionne}</span>
-                        <button onClick={exporterFiche} style={{ padding:'6px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:'transparent', color:'var(--muted)', cursor:'pointer', fontSize:'12px' }}>⬇ Exporter</button>
+                        <div style={{ display:'flex', gap:'8px' }}>
+                          <button onClick={() => document.getElementById('excel-input').click()} style={{ padding:'6px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:'transparent', color:'var(--muted)', cursor:'pointer', fontSize:'12px' }}>📊 Importer une liste de prix</button>
+                          <button onClick={exporterFiche} style={{ padding:'6px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:'transparent', color:'var(--muted)', cursor:'pointer', fontSize:'12px' }}>⬇ Exporter</button>
+                        </div>
                       </div>
                       <div style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:'10px', marginBottom:'16px' }}>
                         <div style={{ background:'rgba(255,255,255,0.03)', borderRadius:'8px', padding:'10px' }}>
@@ -864,12 +851,24 @@ export default function Ingredients() {
             {sousOngletFournisseur === 'historique' && (
               <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'20px', marginBottom:'24px' }}>
                 <p style={{ color:'var(--muted)', fontSize:'12px', marginBottom:'16px', textTransform:'uppercase', letterSpacing:'1px' }}>Historique des achats par ingrédient</p>
-                <div style={{ display:'flex', gap:'10px', marginBottom:'16px' }}>
+                <div style={{ display:'flex', gap:'10px', marginBottom:'12px' }}>
                   <input placeholder="Rechercher un ingrédient" value={searchComparatif} onChange={e => setSearchComparatif(e.target.value)} style={{ ...inp, flex:1 }} />
                   <select value={categorieComparatif} onChange={e => setCategorieComparatif(e.target.value)} style={{ ...inp, width:'180px' }}>
                     <option value=''>Toutes catégories</option>
                     {CATEGORIES.map(c => <option key={c}>{c}</option>)}
                   </select>
+                </div>
+                <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', marginBottom:'16px' }}>
+                  {fournisseurs.map(f => {
+                    const coche = fournisseursCoches.includes(f)
+                    return (
+                      <label key={f} style={{ display:'flex', alignItems:'center', gap:'6px', padding:'5px 10px', borderRadius:'8px', border:'1px solid '+(coche?'#00C2FF':'var(--border)'), background: coche?'rgba(0,194,255,0.1)':'transparent', color: coche?'#00C2FF':'var(--muted)', fontSize:'12px', cursor:'pointer' }}>
+                        <input type="checkbox" checked={coche} onChange={e => setFournisseursCoches(prev => e.target.checked ? [...prev, f] : prev.filter(x => x !== f))} />
+                        {f}
+                      </label>
+                    )
+                  })}
+                  {fournisseursCoches.length > 0 && <button onClick={() => setFournisseursCoches([])} style={{ padding:'5px 10px', borderRadius:'8px', border:'1px solid var(--border)', background:'transparent', color:'var(--muted)', fontSize:'12px', cursor:'pointer' }}>Tout afficher</button>}
                 </div>
                 {comparaisonFiltree.length > 0 ? (
                   <div style={{ overflowX:'auto' }}>
@@ -877,18 +876,20 @@ export default function Ingredients() {
                       <thead>
                         <tr style={{ borderBottom:'1px solid var(--border)' }}>
                           <th style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'left', fontWeight:'600' }}>Ingrédient</th>
-                          {fournisseurs.map(f => <th key={f} style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'right', fontWeight:'600' }}>{f}</th>)}
+                          {(fournisseursCoches.length ? fournisseursCoches : fournisseurs).map(f => <th key={f} style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'right', fontWeight:'600' }}>{f}</th>)}
                           <th style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'right', fontWeight:'600' }}>Meilleur prix</th>
                         </tr>
                       </thead>
                       <tbody>
                         {comparaisonFiltree.map((row, i) => {
-                          const prix = fournisseurs.map(f => row[f]).filter(Boolean)
+                          const colonnes = fournisseursCoches.length ? fournisseursCoches : fournisseurs
+                          const prix = colonnes.map(f => row[f]).filter(Boolean)
+                          if (!prix.length) return null
                           const min = Math.min(...prix)
                           return (
                             <tr key={i} style={{ borderBottom:'1px solid var(--border)' }}>
                               <td style={{ padding:'10px 12px', fontWeight:'500' }}>{row.nom}</td>
-                              {fournisseurs.map(f => (
+                              {colonnes.map(f => (
                                 <td key={f} style={{ padding:'10px 12px', textAlign:'right', color: row[f] === min ? '#00E5A0' : 'inherit', fontWeight: row[f] === min ? '700' : '400' }}>
                                   {row[f] ? <>{row[f].toFixed(2)}$<br/>{row[f+'_format'] && <span style={{ fontSize:'11px', color:'var(--muted)', fontWeight:'400' }}>{row[f+'_format']}</span>}</> : '—'}
                                 </td>
@@ -923,23 +924,19 @@ export default function Ingredients() {
                       </div>
                     )}
                   </div>
-                  <button onClick={() => setModeDuel(!modeDuel)} style={{ padding:'7px 12px', borderRadius:'8px', border:'1px solid '+(modeDuel?'#00C2FF':'var(--border)'), background: modeDuel?'rgba(0,194,255,0.1)':'transparent', color: modeDuel?'#00C2FF':'var(--muted)', cursor:'pointer', fontSize:'12px' }}>⚔️ Mode duel</button>
                 </div>
 
-
-
-                {!modeDuel ? (
-                  <div style={{ overflowX:'auto' }}>
+                <div style={{ overflowX:'auto' }}>
                     <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'13px' }}>
                       <thead>
                         <tr style={{ borderBottom:'1px solid var(--border)' }}>
                           <th style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'left', fontWeight:'600' }}>Fournisseur</th>
                           <th style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'center', fontWeight:'600' }}>Produits</th>
-                          <th style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'center', fontWeight:'600' }}>Compétitivité</th>
-                          <th style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'center', fontWeight:'600' }}>Tendance</th>
-                          <th style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'right', fontWeight:'600' }}>Dépenses</th>
-                          <th style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'center', fontWeight:'600' }}>Commandes</th>
-                          <th style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'center', fontWeight:'600' }}>Statut</th>
+                          <th title="% de ses produits liés (via Regrouper sous) où ce fournisseur a le prix le plus bas" style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'center', fontWeight:'600', cursor:'help', textDecoration:'underline dotted', textUnderlineOffset:'3px' }}>Compétitivité</th>
+                          <th title="Évolution annualisée moyenne du prix, calculée à partir de ton historique d'achats chez ce fournisseur" style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'center', fontWeight:'600', cursor:'help', textDecoration:'underline dotted', textUnderlineOffset:'3px' }}>Tendance</th>
+                          <th title="Somme des derniers prix d'achat enregistrés pour ce fournisseur" style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'right', fontWeight:'600', cursor:'help', textDecoration:'underline dotted', textUnderlineOffset:'3px' }}>Dépenses</th>
+                          <th title="Nombre d'achats enregistrés dans l'historique pour ce fournisseur" style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'center', fontWeight:'600', cursor:'help', textDecoration:'underline dotted', textUnderlineOffset:'3px' }}>Commandes</th>
+                          <th title="Basé sur la tendance et le seuil d'alerte configuré (bouton Seuil)" style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'center', fontWeight:'600', cursor:'help', textDecoration:'underline dotted', textUnderlineOffset:'3px' }}>Statut</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -960,47 +957,7 @@ export default function Ingredients() {
                       </tbody>
                     </table>
                     {statsFournisseursFiltres.length === 0 && <p style={{ color:'var(--muted)', fontSize:'13px', textAlign:'center', padding:'24px' }}>Aucun résultat</p>}
-                  </div>
-                ) : (
-                  <div>
-                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom:'16px' }}>
-                      <select value={duelA} onChange={e => setDuelA(e.target.value)} style={inp}>
-                        <option value=''>Fournisseur A...</option>
-                        {fournisseurs.map(f => <option key={f}>{f}</option>)}
-                      </select>
-                      <select value={duelB} onChange={e => setDuelB(e.target.value)} style={inp}>
-                        <option value=''>Fournisseur B...</option>
-                        {fournisseurs.map(f => <option key={f}>{f}</option>)}
-                      </select>
-                    </div>
-                    {duelData && duelData.length > 0 ? (
-                      <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'13px' }}>
-                        <thead>
-                          <tr style={{ borderBottom:'1px solid var(--border)' }}>
-                            <th style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'left', fontWeight:'600' }}>Produit</th>
-                            <th style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'right', fontWeight:'600' }}>{duelA}</th>
-                            <th style={{ padding:'8px 12px', color:'var(--muted)', textAlign:'right', fontWeight:'600' }}>{duelB}</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {duelData.map((d,i) => {
-                            const prixA = parseFloat(d.ingA.prix_unitaire), prixB = parseFloat(d.ingB.prix_unitaire)
-                            return (
-                            <tr key={i} style={{ borderBottom:'1px solid var(--border)' }}>
-                              <td style={{ padding:'10px 12px' }}>{d.nom}</td>
-                              <td style={{ padding:'10px 12px', textAlign:'right', color: prixA <= prixB ? '#00E5A0' : 'inherit', fontWeight: prixA <= prixB ? '700' : '400' }}>
-                                <span onClick={() => marquerPrefere(d.ingA)} title={d.ingA.prefere ? 'Marqué préféré' : 'Marquer comme préféré'} style={{ cursor:'pointer', marginRight:'4px' }}>{d.ingA.prefere ? '⭐' : '☆'}</span>{prixA.toFixed(2)}$
-                              </td>
-                              <td style={{ padding:'10px 12px', textAlign:'right', color: prixB <= prixA ? '#00E5A0' : 'inherit', fontWeight: prixB <= prixA ? '700' : '400' }}>
-                                <span onClick={() => marquerPrefere(d.ingB)} title={d.ingB.prefere ? 'Marqué préféré' : 'Marquer comme préféré'} style={{ cursor:'pointer', marginRight:'4px' }}>{d.ingB.prefere ? '⭐' : '☆'}</span>{prixB.toFixed(2)}$
-                              </td>
-                            </tr>
-                          )})}
-                        </tbody>
-                      </table>
-                    ) : <p style={{ color:'var(--muted)', fontSize:'13px', textAlign:'center', padding:'24px' }}>{duelA && duelB ? 'Aucun produit regroupé en commun entre ces deux fournisseurs (utilise "Regrouper sous" dans la fiche d\'un ingrédient pour les lier)' : 'Choisis 2 fournisseurs à comparer'}</p>}
-                  </div>
-                )}
+                </div>
               </div>
             )}
           </div>
@@ -1064,29 +1021,34 @@ export default function Ingredients() {
               )}
             </div>
 
-            <p style={{ color:'var(--muted)', fontSize:'12px', margin:'28px 0 12px', textTransform:'uppercase', letterSpacing:'1px' }}>Suggestions de liens (mots communs détectés)</p>
-            {suggestionsLiens.length === 0 && (
+            <div onClick={() => setSuggestionsSectionOuverte(!suggestionsSectionOuverte)} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', margin:'28px 0 12px', cursor:'pointer' }}>
+              <p style={{ color:'var(--muted)', fontSize:'12px', textTransform:'uppercase', letterSpacing:'1px', margin:0 }}>Suggestions de liens (mots communs détectés){suggestionsLiens.length ? ' ('+suggestionsLiens.length+')' : ''}</p>
+              <span style={{ color:'var(--muted)', fontSize:'12px' }}>{suggestionsSectionOuverte ? '▲' : '▼'}</span>
+            </div>
+            {suggestionsSectionOuverte && suggestionsLiens.length === 0 && (
               <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'24px', textAlign:'center', marginBottom:'24px' }}>
                 <p style={{ color:'var(--muted)', fontSize:'13px' }}>Aucune suggestion pour le moment</p>
               </div>
             )}
-            {suggestionsLiens.map(({ mot, items }) => {
+            {suggestionsSectionOuverte && suggestionsLiens.map(({ mot, items }) => {
               const sel = selectionSuggestion[mot] || items.map(i => i.id)
               return (
-                <div key={mot} style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'20px', marginBottom:'16px' }}>
-                  <p style={{ fontWeight:'600', marginBottom:'12px' }}>"{mot}" <span style={{ color:'var(--muted)', fontSize:'12px', fontWeight:'400' }}>({items.length} ingrédients trouvés)</span></p>
-                  {items.map(ing => {
-                    const estCoche = sel.includes(ing.id)
-                    return (
-                      <label key={ing.id} style={{ display:'flex', alignItems:'center', gap:'10px', padding:'6px 0', borderBottom:'1px solid var(--border)', cursor:'pointer' }}>
-                        <input type="checkbox" checked={estCoche} onChange={e => {
-                          const next = e.target.checked ? [...sel, ing.id] : sel.filter(id => id !== ing.id)
-                          setSelectionSuggestion({ ...selectionSuggestion, [mot]: next })
-                        }} />
-                        <span style={{ fontSize:'13px' }}>{ing.nom} <span style={{ color:'var(--muted)' }}>· {ing.fournisseur||'Sans fournisseur'}{ing.ingredient_base ? ' · déjà lié: '+ing.ingredient_base : ''}</span></span>
-                      </label>
-                    )
-                  })}
+                <div key={mot} style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'20px', marginBottom:'10px' }}>
+                  <p style={{ fontWeight:'600', margin:'0 0 12px' }}>"{mot}" <span style={{ color:'var(--muted)', fontSize:'12px', fontWeight:'400' }}>({items.length} ingrédients trouvés)</span></p>
+                  <div>
+                    {items.map(ing => {
+                      const estCoche = sel.includes(ing.id)
+                      return (
+                        <label key={ing.id} style={{ display:'flex', alignItems:'center', gap:'10px', padding:'6px 0', borderBottom:'1px solid var(--border)', cursor:'pointer' }}>
+                          <input type="checkbox" checked={estCoche} onChange={e => {
+                            const next = e.target.checked ? [...sel, ing.id] : sel.filter(id => id !== ing.id)
+                            setSelectionSuggestion({ ...selectionSuggestion, [mot]: next })
+                          }} />
+                          <span style={{ fontSize:'13px' }}>{ing.nom} <span style={{ color:'var(--muted)' }}>· {ing.fournisseur||'Sans fournisseur'}{ing.ingredient_base ? ' · déjà lié: '+ing.ingredient_base : ''}</span></span>
+                        </label>
+                      )
+                    })}
+                  </div>
                   <div style={{ display:'flex', gap:'8px', marginTop:'12px', alignItems:'center' }}>
                     <input value={nomsSuggestion[mot] ?? mot} onChange={e => setNomsSuggestion({ ...nomsSuggestion, [mot]: e.target.value })} style={{ ...inp, width:'200px' }} placeholder="Nom du lien" />
                     <button onClick={() => lierSuggestion(mot, items)} style={{ padding:'8px 16px', borderRadius:'8px', background:'#00C2FF', color:'#0A0F1E', fontWeight:'700', border:'none', cursor:'pointer', fontSize:'13px' }}>Lier {sel.length} ingrédient(s)</button>
@@ -1094,30 +1056,6 @@ export default function Ingredients() {
                 </div>
               )
             })}
-
-            <p style={{ color:'var(--muted)', fontSize:'12px', margin:'28px 0 12px', textTransform:'uppercase', letterSpacing:'1px' }}>Ajouter à un lien existant</p>
-            <div style={{ background:'var(--card)', border:'1px solid var(--border)', borderRadius:'12px', padding:'20px', marginBottom:'24px' }}>
-              <select value={lienChoisi} onChange={e => { setLienChoisi(e.target.value); setSelectionLien([]) }} style={inp}>
-                <option value=''>Choisir un lien...</option>
-                {groupesExistants.map(g => <option key={g}>{g}</option>)}
-              </select>
-              {lienChoisi && (
-                <>
-                  <div style={{ maxHeight:'340px', overflowY:'auto', marginTop:'14px' }}>
-                    {ingredientsHorsLien.map(ing => (
-                      <label key={ing.id} style={{ display:'flex', alignItems:'center', gap:'10px', padding:'8px 0', borderBottom:'1px solid var(--border)', cursor:'pointer' }}>
-                        <input type="checkbox" checked={selectionLien.includes(ing.id)} onChange={e => setSelectionLien(prev => e.target.checked ? [...prev, ing.id] : prev.filter(id => id !== ing.id))} />
-                        <span style={{ fontSize:'13px' }}>{ing.nom} <span style={{ color:'var(--muted)' }}>· {ing.fournisseur||'Sans fournisseur'} · {parseFloat(ing.prix_unitaire).toFixed(2)}$/{ing.unite}{ing.ingredient_base ? ' · lié: '+ing.ingredient_base : ''}</span></span>
-                      </label>
-                    ))}
-                    {ingredientsHorsLien.length === 0 && <p style={{ color:'var(--muted)', fontSize:'13px', padding:'12px 0' }}>Tous les ingrédients actifs sont déjà dans ce lien</p>}
-                  </div>
-                  {selectionLien.length > 0 && (
-                    <button onClick={ajouterAuLien} style={{ marginTop:'14px', padding:'8px 16px', borderRadius:'8px', background:'#00C2FF', color:'#0A0F1E', fontWeight:'700', border:'none', cursor:'pointer', fontSize:'13px' }}>Ajouter {selectionLien.length} ingrédient(s) au lien "{lienChoisi}"</button>
-                  )}
-                </>
-              )}
-            </div>
 
             <p style={{ color:'var(--muted)', fontSize:'12px', margin:'28px 0 12px', textTransform:'uppercase', letterSpacing:'1px' }}>Liens déjà créés</p>
             {liensExistantsDetail.length === 0 && (
@@ -1134,6 +1072,17 @@ export default function Ingredients() {
                     <button onClick={() => retirerDuLien(ing)} title="Retirer de ce lien" style={{ background:'none', border:'none', color:'var(--muted)', cursor:'pointer', fontSize:'13px' }}>✕</button>
                   </div>
                 ))}
+                <button onClick={() => setAjoutOuvert({ ...ajoutOuvert, [nomLien]: !ajoutOuvert[nomLien] })} style={{ marginTop:'10px', padding:'6px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:'transparent', color:'var(--muted)', cursor:'pointer', fontSize:'12px' }}>+ Ajouter un ingrédient</button>
+                {ajoutOuvert[nomLien] && (
+                  <div style={{ marginTop:'10px' }}>
+                    <input placeholder="Rechercher un ingrédient..." value={rechercheAjout[nomLien]||''} onChange={e => setRechercheAjout({ ...rechercheAjout, [nomLien]: e.target.value })} style={inp} />
+                    <div style={{ maxHeight:'180px', overflowY:'auto', marginTop:'8px' }}>
+                      {ingredientsActifs.filter(i => i.ingredient_base !== nomLien && (!rechercheAjout[nomLien] || i.nom.toLowerCase().includes(rechercheAjout[nomLien].toLowerCase()))).slice(0,25).map(ing => (
+                        <div key={ing.id} onClick={async () => { await supabase.from('ingredients').update({ ingredient_base: nomLien }).eq('id', ing.id); await reload(); setToast(`✓ Ajouté au lien "${nomLien}"`) }} style={{ fontSize:'12px', padding:'6px 4px', cursor:'pointer', color:'var(--muted)', borderBottom:'1px solid var(--border)' }} onMouseEnter={e=>e.currentTarget.style.color='#00C2FF'} onMouseLeave={e=>e.currentTarget.style.color='var(--muted)'}>{ing.nom} · {ing.fournisseur||'Sans fournisseur'}{ing.ingredient_base ? ' (lié: '+ing.ingredient_base+')' : ''}</div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
