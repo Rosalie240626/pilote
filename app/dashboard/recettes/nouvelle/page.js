@@ -19,7 +19,7 @@ export default function NouvelleRecette() {
     const { data: member } = await supabase.from('organization_members').select('organization_id').eq('user_id', user.id).single()
     if (!member) return router.push('/dashboard/restaurant')
     setOrgId(member.organization_id)
-    const { data } = await supabase.from('ingredients').select('*').eq('organization_id', member.organization_id).order('nom')
+    const { data } = await supabase.from('ingredients').select('*').eq('organization_id', member.organization_id).eq('hors_inventaire', false).order('nom')
     setIngredients(data || [])
   }
 

@@ -21,7 +21,7 @@ export default function DetailRecette() {
     const { data: member } = await supabase.from('organization_members').select('organization_id').eq('user_id', user.id).single()
     if (!member) return router.push('/dashboard/restaurant')
     setOrgId(member.organization_id)
-    const { data: allIng } = await supabase.from('ingredients').select('*').eq('organization_id', member.organization_id).eq('archived', false).order('nom')
+    const { data: allIng } = await supabase.from('ingredients').select('*').eq('organization_id', member.organization_id).eq('archived', false).eq('hors_inventaire', false).order('nom')
     setIngredients(allIng || [])
     const { data: recette } = await supabase.from('recettes').select('*, recette_ingredients(id, ingredient_id, grammage)').eq('id', params.id).single()
     if (!recette) return router.push('/dashboard/recettes')
